@@ -30,7 +30,7 @@ It works equally well as a **standalone DNS server** that answers clients direct
 
 ## 🚀 Workflow
 
-**Client → UpDNS → Rule matching → Cache / Upstream DNS (UDP · TCP · DoT · DoH) NFT Sets → Response**
+**Client → UpDNS → Rule matching → Cache / Upstream DNS (UDP · TCP · DoT · DoH) → NFT Sets → Response**
 
 UpDNS receives queries at a single entry point and matches the domain against your rules. A cache hit is answered directly; otherwise the selected upstreams are queried. UpDNS writes addresses to nftables sets only when a rule configures a set and the DNS result is applicable; this is not a step in every query.
 
