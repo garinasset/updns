@@ -86,7 +86,7 @@ uci commit dhcp
 /etc/init.d/dnsmasq restart
 ```
 
-这样可以避免 dnsmasq 与 UpDNS 各自缓存带来的状态分散，以及规则或上游变更后旧结果仍留在 dnsmasq 缓存中的情况。禁用 dnsmasq 缓存后，转发到 UpDNS 的查询由 UpDNS 管理缓存；UpDNS 日志与 CLI 的 `Cache Hit` / `Upstream Query` 只反映实际到达 UpDNS 的查询，未转发给 UpDNS 的 dnsmasq 本地或缓存响应不会出现在其中。
+这样可以避免 dnsmasq 与 UpDNS 各自缓存带来的状态分散，以及规则或上游变更后旧结果仍留在 dnsmasq 缓存中的情况。禁用 dnsmasq 缓存后，转发到 UpDNS 的查询由 UpDNS 管理缓存；UpDNS 日志与 CLI 的 `Cache Hit` / `Upstream Query` 只反映实际到达 UpDNS 的查询，未转发给 UpDNS 的 查询 不会出现在其中。
 
 ## 🔗 仓库
 
