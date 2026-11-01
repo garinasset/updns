@@ -1,0 +1,4 @@
+{
+	"config": "updns",
+	"exec": "/usr/libexec/updns-uci-reload"
+}

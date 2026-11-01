@@ -1,0 +1,19 @@
+# Go build and test outputs
+/bin/
+/coverage.out
+/coverage.html
+*.test
+
+# Local OpenWrt package builds
+/artifacts/*.apk
+/updns
+
+# Editor and operating-system files
+.DS_Store
+*.swp
+*.swo
+
+# Local-only notes and environment-specific delivery records
+/DELIVERY.md
+/MEMO.md
+/REQUIREMENTS.md

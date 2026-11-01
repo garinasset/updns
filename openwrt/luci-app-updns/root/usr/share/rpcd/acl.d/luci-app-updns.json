@@ -1,0 +1,28 @@
+{
+	"luci-app-updns": {
+		"description": "Grant access to UpDNS configuration and status",
+		"read": {
+			"file": {
+				"/tmp/updns_cache_size": [ "read" ],
+				"/tmp/resolv.conf.d/resolv.conf.auto": [ "read" ],
+				"/etc/updns/domainlists": [ "read" ],
+				"/etc/updns/domainlists/*": [ "read" ],
+				"/usr/sbin/nft -j list sets": [ "exec" ]
+			},
+			"ubus": {
+				"file": [ "read" ],
+				"service": [ "list" ]
+			},
+			"uci": [ "updns" ]
+		},
+		"write": {
+			"file": {
+				"/etc/updns/domainlists/*": [ "write" ]
+			},
+			"ubus": {
+				"file": [ "write" ]
+			},
+			"uci": [ "updns" ]
+		}
+	}
+}

@@ -1,0 +1,275 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: UpDNS 1.0.19\n"
+"PO-Revision-Date: 2026-11-01 04:12+0800\n"
+"Last-Translator: UpDNS contributors\n"
+"Language-Team: Simplified Chinese\n"
+"Language: zh_CN\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "UpDNS"
+msgstr "UpDNS"
+
+msgid "UpDNS is an upstream DNS provider that offers a unified DNS entry point and routes queries to selected upstream servers."
+msgstr "updns 是一个上游 DNS 提供商，对外提供统一的 DNS 服务入口，对内匹配规则将查询分发至指定的上游 DNS。"
+
+msgid "Running Status"
+msgstr "运行状态"
+
+msgid "Service Status"
+msgstr "服务状态"
+
+msgid "Running"
+msgstr "运行中"
+
+msgid "Stopped"
+msgstr "已停止"
+
+msgid "Unavailable"
+msgstr "不可用"
+
+msgid "Cache Entries"
+msgstr "缓存条目数"
+
+msgid "Settings and Port"
+msgstr "设置及端口"
+
+msgid "Enable UpDNS"
+msgstr "启用"
+
+msgid "Start or stop the UpDNS DNS service."
+msgstr "启动或停止 UpDNS DNS 服务。"
+
+msgid "Port"
+msgstr "端口"
+
+msgid "UDP and TCP port on which UpDNS accepts DNS queries."
+msgstr "UpDNS 接收 DNS 查询的 UDP 和 TCP 端口。"
+
+msgid "Use Local Resolv File"
+msgstr "使用本地解析文件"
+
+msgid "Add every nameserver in the resolver file below as a UDP upstream when the service starts."
+msgstr "服务启动时，将下方解析文件中的所有 nameserver 自动添加为 UDP 上游。"
+
+msgid "Local Resolv File"
+msgstr "本地解析文件"
+
+msgid "Path to a standard resolv.conf file. Its nameserver entries are loaded automatically."
+msgstr "标准 resolv.conf 文件路径；其中的 nameserver 条目会自动加载。"
+
+msgid "Concurrent Query"
+msgstr "并行查询"
+
+msgid "Query selected upstreams in parallel and use the first response; when disabled, try them in order. Disabled by default."
+msgstr "启用时并行查询规则内所选上游 DNS 并采用首个响应；禁用时按顺序逐个尝试；默认禁用。"
+
+msgid "Upstream DNS"
+msgstr "上游 DNS"
+
+msgid "Nameservers automatically loaded from the local resolver file: %s"
+msgstr "从本地解析文件自动加载的 nameserver：%s"
+
+msgid "Could not read the local resolver file: %s"
+msgstr "无法读取本地解析文件：%s"
+
+msgid "Local resolver nameservers are added here automatically when enabled and available."
+msgstr "启用本地解析文件且文件可用时，其中的 nameserver 会自动添加到上游 DNS 列表。"
+
+msgid "Automatic"
+msgstr "本地解析文件 自动加载"
+
+msgid "Name"
+msgstr "名称"
+
+msgid "Unique identifier used by rules to select this upstream."
+msgstr "上游 DNS 唯一标识。"
+
+msgid "Address"
+msgstr "地址"
+
+msgid "UDP/TCP default to port 53, DoT to 853, and HTTPS/DoH to 443. Use host:port for custom DNS ports (IPv6: [2001:db8::1]:5353); for DoH, enter a full URL such as https://dns.example:8443/dns-query."
+msgstr "UDP/TCP 默认端口为 53，DoT 为 853，HTTPS/DoH 为 443。自定义 DNS 端口使用“主机:端口”格式（IPv6 示例：[2001:db8::1]:5353）。DoH 请填写完整 URL，例如 https://dns.example:8443/dns-query。"
+
+msgid "Protocol"
+msgstr "协议"
+
+msgid "Transport protocol used to send DNS queries to this server."
+msgstr "DNS 协议。"
+
+msgid "Timeout"
+msgstr "超时"
+
+msgid "Maximum number of seconds to wait for a response from this upstream."
+msgstr "等待上游响应的超时时间（秒）。"
+
+msgid "Domain Lists"
+msgstr "域名列表"
+
+msgid "Domain List Name"
+msgstr "域名列表名称"
+
+msgid "Domain List File"
+msgstr "域名列表文件"
+
+msgid "A unique identifier shown in rule selectors."
+msgstr "规则选择器中显示的唯一名称。"
+
+msgid "A domain list name is required."
+msgstr "域名列表名称不能为空。"
+
+msgid "Domain list names must be unique."
+msgstr "域名列表名称必须唯一。"
+
+msgid "Upload a plain-text file with one domain per line. Rules can select the saved list."
+msgstr "上传纯文本域名列表文件，每行一个域名。规则可选择已保存的列表。"
+
+msgid "Cache"
+msgstr "缓存"
+
+msgid "Enable Cache"
+msgstr "启用缓存"
+
+msgid "Cache DNS responses until their applicable TTL expires."
+msgstr "缓存 DNS 响应，直至对应 TTL 到期。"
+
+msgid "Cache Size"
+msgstr "缓存大小"
+
+msgid "Maximum number of DNS entries kept in the cache."
+msgstr "缓存中保留的 DNS 条目数量上限。"
+
+msgid "Active Preload"
+msgstr "主动预取"
+
+msgid "Refresh cached records shortly before their TTL expires."
+msgstr "在缓存记录 TTL 到期前主动刷新记录。"
+
+msgid "Logging"
+msgstr "日志"
+
+msgid "Log Queries"
+msgstr "记录查询日志"
+
+msgid "Write individual DNS queries to the system log. Disabled by default."
+msgstr "将每条 DNS 查询写入系统日志。默认禁用。"
+
+msgid "Log Level"
+msgstr "日志级别"
+
+msgid "Minimum severity written to stdout/stderr and the system log."
+msgstr "写入 stdout/stderr 和 系统日志 的最低严重级别。"
+
+msgid "Debug"
+msgstr "调试"
+
+msgid "Info"
+msgstr "信息"
+
+msgid "Warning"
+msgstr "警告"
+
+msgid "Error"
+msgstr "错误"
+
+msgid "The configuration sections could not be arranged into tabs."
+msgstr "无法将配置区域排列为选项卡。"
+
+msgid "Rules"
+msgstr "规则"
+
+msgid "Drag domain-matching rules to change their evaluation order. The first matching rule is applied. A fallback rule is always kept at the bottom and is used only when no domain-matching rule matches."
+msgstr "拖动域名匹配规则可调整其匹配顺序；按列表顺序应用首个匹配规则。兜底规则始终自动固定在列表末尾，仅当所有域名匹配规则均未命中时执行。"
+
+msgid "Domain Matching"
+msgstr "域名匹配"
+
+msgid "Match this rule against the selected domain lists. Set it to No to make this the only fallback rule; it is applied last."
+msgstr "是否匹配域名列表。如果显示为 No 则该规则是最后且唯一的兜底规则。"
+
+msgid "Only one fallback rule is allowed."
+msgstr "最多只能配置一条兜底规则。"
+
+msgid "Rule Name"
+msgstr "规则名称"
+
+msgid "A short name shown in logs and CLI output."
+msgstr "在 日志 和 Cli 输出结果中显示的简短名称。"
+
+msgid "If the Domain Matches"
+msgstr "如果域名匹配"
+
+msgid "Select one or more domain lists. A match in any selected list triggers this rule."
+msgstr "选择一个或多个域名列表；匹配任一列表时触发此规则。"
+
+msgid "Already used by rule: %s"
+msgstr "已被规则“%s”引用"
+
+msgid "Domain list %s is already used by rule %s."
+msgstr "域名列表 %s 已被规则 %s 引用。"
+
+msgid "Fallback rules are always kept last."
+msgstr "兜底规则始终固定在列表末尾。"
+
+msgid "Drag to reorder"
+msgstr "拖动以调整顺序"
+
+msgid "No options available"
+msgstr "没有可选项"
+
+msgid "Return NXDOMAIN"
+msgstr "返回 NXDOMAIN"
+
+msgid "Return an NXDOMAIN response without querying upstream DNS."
+msgstr "启用后直接返回 NXDOMAIN 响应，不查询上游 DNS。"
+
+msgid "Then Query Upstream DNS"
+msgstr "则查询上游 DNS"
+
+msgid "Select the upstream servers used for matching domains. No upstream is needed for NXDOMAIN."
+msgstr "选择需要使用的上游 DNS；返回结果设置为 NXDOMAIN 响应时, 不需要选择上游 DNS。"
+
+msgid "And Return"
+msgstr "并返回结果"
+
+msgid "Choose which address records are returned to the client."
+msgstr "选择向客户端返回哪些地址记录。"
+
+msgid "IPv4 + IPv6"
+msgstr "IPv4 + IPv6"
+
+msgid "IPv4 Only"
+msgstr "仅 IPv4"
+
+msgid "IPv6 Only"
+msgstr "仅 IPv6"
+
+msgid "NXDOMAIN"
+msgstr "NXDOMAIN"
+
+msgid "Add IPv4 Results to NFT Sets"
+msgstr "将 IPv4 结果加入 NFT 集合"
+
+msgid "Select system nftables sets that receive resolved IPv4 addresses."
+msgstr "选择用于存放解析所得 IPv4 地址的系统 nftables 集合。"
+
+msgid "Add IPv6 Results to NFT Sets"
+msgstr "将 IPv6 结果加入 NFT 集合"
+
+msgid "Select system nftables sets that receive resolved IPv6 addresses."
+msgstr "选择用于存放解析所得 IPv6 地址的系统 nftables 集合。"
+
+msgid "Add Upstream DNS IPs to NFT Sets"
+msgstr "将上游 DNS IP 加入 NFT 集合"
+
+msgid "Also add the selected upstream servers' IPv4 and IPv6 addresses to the corresponding sets. Hostnames are resolved at startup and refreshed every five minutes."
+msgstr "同时将所选上游 DNS 服务器的 IPv4 和 IPv6 地址加入对应集合。服务启动时解析主机名，并每五分钟刷新。"
+
+msgid "The system nftables set list could not be parsed."
+msgstr "无法解析系统 nftables 集合列表。"
+
+msgid "Could not list system nftables sets: %s"
+msgstr "无法列出系统 nftables 集合：%s"
