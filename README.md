@@ -4,7 +4,7 @@
 
 UpDNS 是一个基于 [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logoColor=white)](https://go.dev/) 的 OpenWrt 上游 DNS 提供商：对外提供统一的 DNS 服务入口，对内按规则将查询分发至指定的上游 DNS。
 
-无论是作为**独立的 DNS 服务器**直接提供解析服务（监听端口可自行设置），还是作为 **dnsmasq 等 DNS 应用的上游 DNS** 接收它们转发的查询（默认监听 `153` 端口），UpDNS 都能胜任。
+无论是作为**独立的 DNS 服务器**直接提供解析服务（监听端口可自行设置），还是作为 **dnsmasq 等 DNS 应用的上游 DNS** （默认监听 `153` 端口），UpDNS 都能胜任。
 
 ## 🧩 技术栈
 
@@ -30,7 +30,7 @@ UpDNS 是一个基于 [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logo
 
 ## 🚀 工作流程
 
-**客户端 → UpDNS → 规则匹配 → 缓存 / 上游 DNS（UDP · TCP · DoT · DoH） → 返回结果**
+**客户端 → UpDNS → 规则匹配 → 缓存 / 上游 DNS（UDP · TCP · DoT · DoH） NFT SETS → 返回结果**
 
 UpDNS 作为统一入口接收查询，按规则匹配域名列表，命中缓存则直接返回，否则查询所选上游。只有在规则配置了 nftables 集合且解析结果适用时，UpDNS 才会将地址写入集合；这不是每次查询的必经步骤。
 
@@ -86,7 +86,7 @@ uci commit dhcp
 /etc/init.d/dnsmasq restart
 ```
 
-这样可以避免 dnsmasq 与 UpDNS 各自缓存带来的状态分散，以及规则或上游变更后旧结果仍留在 dnsmasq 缓存中的情况。两层缓存按各自的 TTL 和缓存策略独立过期，不应笼统地说 TTL 会被重复延长。禁用 dnsmasq 缓存后，转发到 UpDNS 的查询由 UpDNS 管理缓存；UpDNS 日志与 CLI 的 `Cache Hit` / `Upstream Query` 只反映实际到达 UpDNS 的查询，未转发给 UpDNS 的 dnsmasq 本地或缓存响应不会出现在其中。
+这样可以避免 dnsmasq 与 UpDNS 各自缓存带来的状态分散，以及规则或上游变更后旧结果仍留在 dnsmasq 缓存中的情况。禁用 dnsmasq 缓存后，转发到 UpDNS 的查询由 UpDNS 管理缓存；UpDNS 日志与 CLI 的 `Cache Hit` / `Upstream Query` 只反映实际到达 UpDNS 的查询，未转发给 UpDNS 的 dnsmasq 本地或缓存响应不会出现在其中。
 
 ## 🔗 仓库
 

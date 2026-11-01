@@ -30,7 +30,7 @@ It works equally well as a **standalone DNS server** that answers clients direct
 
 ## 🚀 Workflow
 
-**Client → UpDNS → Rule matching → Cache / Upstream DNS (UDP · TCP · DoT · DoH) → Response**
+**Client → UpDNS → Rule matching → Cache / Upstream DNS (UDP · TCP · DoT · DoH) NFT Sets → Response**
 
 UpDNS receives queries at a single entry point and matches the domain against your rules. A cache hit is answered directly; otherwise the selected upstreams are queried. UpDNS writes addresses to nftables sets only when a rule configures a set and the DNS result is applicable; this is not a step in every query.
 
@@ -86,7 +86,7 @@ uci commit dhcp
 /etc/init.d/dnsmasq restart
 ```
 
-This avoids split cache state between dnsmasq and UpDNS, as well as old results remaining in dnsmasq after rules or upstreams change. Each cache expires entries according to its own TTL and caching policy, so it is not accurate to say that TTLs are invariably extended repeatedly. With the dnsmasq cache disabled, UpDNS manages caching for queries forwarded to it. UpDNS log and CLI markers (`Cache Hit` / `Upstream Query`) describe only queries that reach UpDNS; dnsmasq-local answers and cached responses that are not forwarded do not appear there.
+This avoids split cache state between dnsmasq and UpDNS, as well as old results remaining in dnsmasq after rules or upstreams change. With the dnsmasq cache disabled, UpDNS manages caching for queries forwarded to it. UpDNS log and CLI markers (`Cache Hit` / `Upstream Query`) describe only queries that reach UpDNS; dnsmasq-local answers and cached responses that are not forwarded do not appear there.
 
 ## 🔗 Repository
 
