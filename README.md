@@ -30,7 +30,7 @@ UpDNS 是一个基于 [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logo
 
 ## 🚀 工作流程
 
-**客户端 → UpDNS → 规则匹配 → 缓存 / 上游 DNS（UDP · TCP · DoT · DoH） NFT SETS → 返回结果**
+**客户端 → UpDNS → 规则匹配 → 缓存 / 上游 DNS（UDP · TCP · DoT · DoH → NFT SETS → 返回结果**
 
 UpDNS 作为统一入口接收查询，按规则匹配域名列表，命中缓存则直接返回，否则查询所选上游。只有在规则配置了 nftables 集合且解析结果适用时，UpDNS 才会将地址写入集合；这不是每次查询的必经步骤。
 
