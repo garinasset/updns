@@ -2,7 +2,7 @@
 
 # Ad networks
 doubleclick.net
-*.doubleclick.net
+doubleclick.net
 ads.google.com
 pagead2.googlesyndication.com
 adservice.google.com
@@ -16,7 +16,7 @@ tracking.example.com
 # Ad providers
 adn.naver.com
 ad.naver.com
-*.criteo.com
+criteo.com
 
 # Malware/Phishing domains (as example)
 malware.example.com

@@ -44,7 +44,7 @@ DoH 地址须为完整 HTTPS URL。IPv6 地址带端口时使用方括号，例�
 
 ### 域名列表
 
-列表项由唯一名称和文件路径组成；规则通过列表名称引用文件。匹配不区分大小写，空行和以 `#` 开头的行会忽略。
+列表项由唯一名称和文件路径组成；规则通过列表名称引用文件; 列表文件格式为每行一个域名。匹配不区分大小写，空行和以 `#` 开头的行会忽略。
 
 域名匹配时会匹配精确域名及其子域名，
 `example.com` 可以匹配 `example.com` 和 `www.example.com`，但不能匹配 `superexample.com`；通过在开头添加 `*` 可以改变这一行为：`*example.com` 可以匹配 `example.com`、`www.example.com`，以及 `superexample.com`。
