@@ -185,10 +185,7 @@ function updateFallbackDragHandles(root) {
 	if (!root)
 		return;
 
-	var header = Array.from(root.querySelectorAll('thead th')).find(function(cell) {
-		return cell.textContent.trim() === _('Rule Name');
-	});
-	var section = header && header.closest('.cbi-section');
+	var section = root.querySelector('#cbi-updns-rule');
 	if (!section)
 		return;
 
@@ -360,6 +357,96 @@ function listNFTSets(reply) {
 	});
 
 	return { values: sets, error: null };
+}
+
+function ruleBadge(kind, text, missing) {
+	return E('span', {
+		'class': 'updns-badge updns-badge-' + kind + (missing ? ' updns-badge-missing' : '')
+	}, text);
+}
+
+function ruleBadges(rows) {
+	rows = rows.filter(function(row) { return row.length; });
+	return rows.length ? E('div', { 'class': 'updns-badge-rows' }, rows.map(function(row) {
+		return E('div', { 'class': 'updns-badges' }, row);
+	})) : '—';
+}
+
+function ruleMatchBadges(section_id) {
+	if (uci.get('updns', section_id, 'domain_match') === '0')
+		return ruleBadges([ [ ruleBadge('fallback', _('Do Not Match (Fallback Rule)')) ] ]);
+
+	var known = {};
+	(uci.sections('updns', 'domainlist') || []).forEach(function(item) {
+		known[item.name || item['.name']] = true;
+	});
+
+	return ruleBadges([ getDomainListValues(uci.get('updns', section_id, 'domain_lists')).map(function(name) {
+		return ruleBadge('list', name, !known[name]);
+	}) ]);
+}
+
+function ruleOperationBadges(section_id, upstreamNames, nftSets) {
+	if (isLocalAnswerAction(uci.get('updns', section_id, 'action')))
+		return ruleBadges([ [ ruleBadge('local', _('Local Answer')) ] ]);
+
+	var dnsBadges = [], nftBadges = [], ipBadges = [];
+	getDomainListValues(uci.get('updns', section_id, 'upstreams')).forEach(function(name) {
+		dnsBadges.push(ruleBadge('upstream', 'DNS: ' + name, upstreamNames.indexOf(name) < 0));
+	});
+	[ [ 'ipv4_nftsets', 'NFT v4: ' ], [ 'ipv6_nftsets', 'NFT v6: ' ] ].forEach(function(item) {
+		getDomainListValues(uci.get('updns', section_id, item[0])).forEach(function(value) {
+			nftBadges.push(ruleBadge('nft', item[1] + value.split('/').slice(1).join('/'),
+				nftSets.indexOf(value) < 0));
+		});
+	});
+	if (uci.get('updns', section_id, 'add_upstream_ips') === '1')
+		ipBadges.push(ruleBadge('upstreamip', _('Upstream DNS IPs → NFT')));
+
+	return ruleBadges([ dnsBadges, nftBadges, ipBadges ]);
+}
+
+function ruleReturnBadge(section_id) {
+	var action = uci.get('updns', section_id, 'action') || 'ipv4+ipv6';
+	var texts = {
+		'nxdomain': _('NXDOMAIN Response'),
+		'zeroip': _('Zero-IP Response'),
+		'ipv4+ipv6': _('IPv4 + IPv6'),
+		'ipv4only': _('IPv4 Only'),
+		'ipv6only': _('IPv6 Only')
+	};
+
+	return ruleBadges([ [ ruleBadge('return', texts[action] || action) ] ]);
+}
+
+function addRuleColumn(section, key, title, render) {
+	var option = section.option(form.DummyValue, key, title);
+	option.modalonly = false;
+	option.textvalue = render;
+	return option;
+}
+
+function installRuleStyles() {
+	if (document.getElementById('updns-rule-styles'))
+		return;
+
+	var colors = {
+		list: [ '#F1F3F5', '#495057' ], fallback: [ 'rgba(230,126,34,.15)', 'inherit', 'rgba(230,126,34,.55)' ],
+		upstream: [ '#E0E7FF', '#3730A3' ], nft: [ '#FFF1DB', '#996000' ],
+		upstreamip: [ '#FEF9C3', '#854D0E' ], local: [ '#E0F2FE', '#0369A1' ], 'return': [ '#E6F4EA', '#267342' ]
+	};
+	var css = [
+		'.updns-badge-rows{display:flex;flex-direction:column;gap:4px;align-items:flex-start}',
+		'.updns-badges{display:flex;flex-wrap:wrap;gap:4px}',
+		'.updns-badge{display:inline-block;padding:1px 8px;border:1px solid transparent;border-radius:10px;font-size:90%;line-height:1.6;white-space:nowrap}',
+		'.updns-badge-missing{border-color:#e74c3c !important;background:#fde8e6 !important;color:#c0392b !important;text-decoration:line-through}'
+	];
+	Object.keys(colors).forEach(function(kind) {
+		var c = colors[kind];
+		css.push('.updns-badge-' + kind + '{background:' + c[0] + ';color:' + c[1] +
+			';border-color:' + (c[2] || c[0]) + '}');
+	});
+	document.head.appendChild(E('style', { 'id': 'updns-rule-styles' }, css.join('')));
 }
 
 function addRuntimeUpstreamRows(section, upstreams) {
@@ -696,13 +783,26 @@ return view.extend({
 		s.anonymous = true;
 		s.sortable = true;
 		s.description = _('Drag domain-matching rules to change their evaluation order. The first matching rule is applied. A fallback rule is always kept at the bottom and is used only when no domain-matching rule matches.');
+		var upstreamNames = listConfiguredUpstreams(localResolvers).map(function(item) { return item.value; });
+		var nftValues = nftResult.values.map(function(item) { return item.value; });
+		installRuleStyles();
+		addRuleColumn(s, '_col_name', _('Name'), function(section_id) {
+			return E('strong', {}, uci.get('updns', section_id, 'name') || section_id);
+		});
+		addRuleColumn(s, '_col_match', _('Rule Match Conditions'), ruleMatchBadges);
+		addRuleColumn(s, '_col_operation', _('Rule Operations'), function(section_id) {
+			return ruleOperationBadges(section_id, upstreamNames, nftValues);
+		});
+		addRuleColumn(s, '_col_return', _('Rule Return Result'), ruleReturnBadge);
 		o = s.option(form.Value, 'name', _('Rule Name'),
 			_('A short name shown in logs and CLI output.'));
 		o.rmempty = false;
+		o.modalonly = true;
 		o = addDynamicMultiValueOption(s, 'domain_lists', _('If the Domain Matches'),
 			_('Select one or more domain lists. A match in any selected list triggers this rule. Select "Do Not Match (Fallback Rule)" to skip domain matching; the rule then becomes the only fallback rule and applies last, when no other rule matches. It cannot be combined with domain lists.'),
 			listDomainLists, dynamicOptionRefreshers);
 		o.rmempty = false;
+		o.modalonly = true;
 		o.forcewrite = true;
 		o.cfgvalue = function(section_id) {
 			if (uci.get('updns', section_id, 'domain_match') === '0')
@@ -790,14 +890,17 @@ return view.extend({
 			function() {
 				return listConfiguredUpstreams(localResolvers);
 			}, dynamicOptionRefreshers);
+		o.modalonly = true;
 		hideAndClearOptionForNXDomain(o, 'upstreams');
 		o = addMultiValueOption(s, 'ipv4_nftsets', _('Add IPv4 Results to NFT Sets'),
 			_('Select system nftables sets that receive resolved IPv4 addresses.'),
 			nftResult.values);
+		o.modalonly = true;
 		hideAndClearOptionForNXDomain(o, 'ipv4_nftsets');
 		o = addMultiValueOption(s, 'ipv6_nftsets', _('Add IPv6 Results to NFT Sets'),
 			_('Select system nftables sets that receive resolved IPv6 addresses.'),
 			nftResult.values);
+		o.modalonly = true;
 		hideAndClearOptionForNXDomain(o, 'ipv6_nftsets');
 		if (nftResult.error) {
 			o.description = _('Could not list system nftables sets: %s').format(String(nftResult.error));
@@ -806,6 +909,7 @@ return view.extend({
 			_("Also add the selected upstream servers' IPv4 and IPv6 addresses to the corresponding sets. Hostnames are resolved at startup and refreshed every five minutes."));
 		o.default = '0';
 		o.rmempty = false;
+		o.modalonly = true;
 		hideAndClearOptionForNXDomain(o, 'add_upstream_ips');
 		o = s.option(form.ListValue, 'action', _('And Return'),
 			_('Choose which address records are returned to the client.'));
@@ -813,6 +917,7 @@ return view.extend({
 		o.value('ipv4only', _('IPv4 Only'));
 		o.value('ipv6only', _('IPv6 Only'));
 		o.default = 'ipv4+ipv6';
+		o.modalonly = true;
 		o.cfgvalue = function(section_id) {
 			var action = uci.get('updns', section_id, 'action');
 			return isLocalAnswerAction(action) || !action ? 'ipv4+ipv6' : action;

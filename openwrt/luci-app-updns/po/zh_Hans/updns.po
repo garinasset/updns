@@ -279,3 +279,18 @@ msgstr "无法解析系统 nftables 集合列表。"
 
 msgid "Could not list system nftables sets: %s"
 msgstr "无法列出系统 nftables 集合：%s"
+
+msgid "Rule Match Conditions"
+msgstr "匹配"
+
+msgid "Rule Operations"
+msgstr "操作"
+
+msgid "Rule Return Result"
+msgstr "返回"
+
+msgid "Upstream DNS IPs → NFT"
+msgstr "上游 DNS IP → NFT"
+
+msgid "Local Answer"
+msgstr "本地应答"
