@@ -48,7 +48,7 @@ type Rule struct {
 	IgnoreDomainMatch bool
 	DomainLists       []string // Domain list names to match against
 	Upstreams         []string // References to UpstreamDNS.Name
-	Action            string   // ipv4+ipv6, ipv4only, ipv6only, nxdomain
+	Action            string   // ipv4+ipv6, ipv4only, ipv6only, nxdomain, zeroip
 	IPv4NFTSets       []string // nftset names for IPv4 results
 	IPv6NFTSets       []string // nftset names for IPv6 results
 	AddUpstreamIPs    bool     // Add selected upstream endpoint IPs to the rule's nftsets
@@ -63,7 +63,7 @@ func DefaultConfig() *Config {
 		LocalResolvFile: "/tmp/resolv.conf.d/resolv.conf.auto",
 		ConcurrentQuery: false,
 		CacheEnabled:    true,
-		CacheSize:       8192,
+		CacheSize:       4096,
 		ActivePreload:   true,
 		LogQuery:        false,
 		LogLevel:        "info",

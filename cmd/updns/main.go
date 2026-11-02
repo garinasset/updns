@@ -247,6 +247,8 @@ func queryLogLine(result *server.QueryResult) string {
 		path = "Cache Hit"
 	} else if strings.EqualFold(result.Action, "nxdomain") {
 		path = "NXDOMAIN RULE"
+	} else if strings.EqualFold(result.Action, "zeroip") {
+		path = "ZERO-IP RULE"
 	}
 	return fmt.Sprintf("Query: %s %s (%s)", result.Domain, result.QueryType, path)
 }
@@ -376,6 +378,8 @@ func queryPath(results []*server.QueryResult) string {
 			path = "Cache Hit"
 		} else if strings.EqualFold(result.Action, "nxdomain") {
 			path = "NXDOMAIN RULE"
+		} else if strings.EqualFold(result.Action, "zeroip") {
+			path = "ZERO-IP RULE"
 		}
 		paths = append(paths, result.QueryType+"="+path)
 	}
@@ -409,6 +413,8 @@ func displayAction(action string) string {
 		return "IPv6 only"
 	case "nxdomain":
 		return "NXDOMAIN"
+	case "zeroip":
+		return "Zero-IP Blocking"
 	default:
 		if action == "" {
 			return "(default)"

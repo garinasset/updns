@@ -49,13 +49,12 @@ reload_service() {
 }
 
 restart() {
-	if ! clear_service_state; then
-		logger -t updns -p daemon.warning "Could not clear previous nftset state; continuing with service restart"
-	fi
 	stop
 	start
 }
 
-stop_service() {
-	:
+service_stopped() {
+	if ! clear_service_state; then
+		logger -t updns -p daemon.warning "Could not clear nftset state after stopping the service"
+	fi
 }

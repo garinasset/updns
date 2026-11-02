@@ -403,6 +403,7 @@ func TestFormatQueryLogIncludesCacheHit(t *testing.T) {
 		{name: "upstream query", want: "Query: example.com. A (Upstream Query)"},
 		{name: "cache hit", cacheHit: true, want: "Query: example.com. A (Cache Hit)"},
 		{name: "NXDOMAIN rule", action: "nxdomain", want: "Query: example.com. A (NXDOMAIN RULE)"},
+		{name: "Zero-IP rule", action: "zeroip", want: "Query: example.com. A (ZERO-IP RULE)"},
 	}
 
 	for _, tt := range tests {
@@ -569,6 +570,67 @@ func TestResolveQueryNXDOMAINRuleDoesNotQueryUpstream(t *testing.T) {
 	result := srv.resolveQuery("blocked.example.", dns.TypeA)
 	if result == nil || result.Rcode != dns.RcodeNameError || result.MatchedRule != "blocked" {
 		t.Fatalf("unexpected NXDOMAIN result: %#v", result)
+	}
+}
+
+func TestQueryZeroIPRuleCachesWithoutUpstream(t *testing.T) {
+	listPath := filepath.Join(t.TempDir(), "blocked.txt")
+	if err := os.WriteFile(listPath, []byte("blocked.example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.UseLocalResolv = false
+	cfg.DomainLists = []config.DomainList{{Name: "blocked", File: listPath}}
+	cfg.Rules = []config.Rule{{ID: "blocked", DomainLists: []string{"blocked"}, Action: "zeroip"}}
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+	if err := srv.LoadDomainList("blocked", listPath); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+		want := []string{"0.0.0.0", "::"}[i]
+		for pass := 0; pass < 2; pass++ {
+			result, err := srv.Query("blocked.example.", qtype)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.CacheHit != (pass == 1) || result.Rcode != dns.RcodeSuccess ||
+				len(result.Answers) != 1 || result.Answers[0] != want {
+				t.Fatalf("type %d pass %d: unexpected result %#v", qtype, pass, result)
+			}
+		}
+	}
+}
+
+func TestQueryNXDOMAINRuleIsCached(t *testing.T) {
+	listPath := filepath.Join(t.TempDir(), "blocked.txt")
+	if err := os.WriteFile(listPath, []byte("blocked.example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.UseLocalResolv = false
+	cfg.DomainLists = []config.DomainList{{Name: "blocked", File: listPath}}
+	cfg.Rules = []config.Rule{{ID: "blocked", DomainLists: []string{"blocked"}, Action: "nxdomain"}}
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+	if err := srv.LoadDomainList("blocked", listPath); err != nil {
+		t.Fatal(err)
+	}
+	for pass := 0; pass < 2; pass++ {
+		result, err := srv.Query("blocked.example.", dns.TypeA)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.CacheHit != (pass == 1) || result.Rcode != dns.RcodeNameError {
+			t.Fatalf("pass %d: unexpected result %#v", pass, result)
+		}
 	}
 }
 

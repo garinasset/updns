@@ -223,24 +223,21 @@ function updateDomainListFrame(modal) {
 		: 'none';
 }
 
+function isLocalAnswerAction(value) {
+	return value === 'nxdomain' || value === 'zeroip';
+}
+
 function updateRuleActionFrames(modal) {
 	if (!modal)
 		return;
 
-	var checkbox = modal.querySelector(
-		'.cbi-value[data-name="return_nxdomain"] input[type="checkbox"]'
-	);
-	var action = modal.querySelector('.cbi-value[data-name="action"] select');
-	var upstreams = modal.querySelector('.cbi-value[data-name="upstreams"]');
-	var ipv4NFTSets = modal.querySelector('.cbi-value[data-name="ipv4_nftsets"]');
-	var ipv6NFTSets = modal.querySelector('.cbi-value[data-name="ipv6_nftsets"]');
-	var addUpstreamIPs = modal.querySelector('.cbi-value[data-name="add_upstream_ips"]');
+	var block = modal.querySelector('.cbi-value[data-name="block"] select');
+	var blocked = !!block && block.value !== 'none';
 
-	var isNXDomain = (checkbox && checkbox.checked) ||
-		(action && action.value === 'nxdomain');
-	[ upstreams, ipv4NFTSets, ipv6NFTSets, addUpstreamIPs ].forEach(function(frame) {
+	[ 'upstreams', 'ipv4_nftsets', 'ipv6_nftsets', 'add_upstream_ips', 'action' ].forEach(function(name) {
+		var frame = modal.querySelector('.cbi-value[data-name="' + name + '"]');
 		if (frame)
-			frame.style.display = isNXDomain ? 'none' : '';
+			frame.style.display = blocked ? 'none' : '';
 	});
 }
 
@@ -253,15 +250,15 @@ function getActiveRuleModal() {
 
 function isNXDomainSelected() {
 	var modal = getActiveRuleModal();
-	var action = modal && modal.querySelector('.cbi-value[data-name="action"] select');
-	return !!action && action.value === 'nxdomain';
+	var block = modal && modal.querySelector('.cbi-value[data-name="block"] select');
+	return !!block && block.value !== 'none';
 }
 
 function hideAndClearOptionForNXDomain(option, key) {
 	var renderFrame = option.renderFrame;
 	option.renderFrame = function(section_id, in_table) {
 		var frame = renderFrame.apply(this, arguments);
-		if (!in_table && uci.get('updns', section_id, 'action') === 'nxdomain')
+		if (!in_table && isLocalAnswerAction(uci.get('updns', section_id, 'action')))
 			frame.style.display = 'none';
 		return frame;
 	};
@@ -295,45 +292,8 @@ function installDomainListToggle() {
 		if (!modal)
 			return;
 
-		if (widget.matches('.cbi-value[data-name="return_nxdomain"] input[type="checkbox"]')) {
-			var action = modal.querySelector('.cbi-value[data-name="action"] select');
-			if (action) {
-				if (widget.checked) {
-					if (action.value !== 'nxdomain')
-						widget.dataset.previousAction = action.value;
-					action.dataset.previousAction = widget.dataset.previousAction || 'ipv4+ipv6';
-					action.value = 'nxdomain';
-				}
-				else if (action.value === 'nxdomain') {
-					action.value = widget.dataset.previousAction || 'ipv4+ipv6';
-					action.dataset.previousAction = action.value;
-					delete widget.dataset.previousAction;
-				}
-			}
+		if (widget.matches('.cbi-value[data-name="block"] select'))
 			updateRuleActionFrames(modal);
-			return;
-		}
-
-		if (widget.matches('.cbi-value[data-name="action"] select')) {
-			var nxdomain = modal.querySelector(
-				'.cbi-value[data-name="return_nxdomain"] input[type="checkbox"]'
-			);
-			if (nxdomain) {
-				if (widget.value === 'nxdomain') {
-					if (!nxdomain.checked)
-						nxdomain.dataset.previousAction = widget.dataset.previousAction || 'ipv4+ipv6';
-					nxdomain.checked = true;
-				}
-				else {
-					nxdomain.checked = false;
-					delete nxdomain.dataset.previousAction;
-				}
-			}
-			widget.dataset.previousAction = widget.value === 'nxdomain'
-				? widget.dataset.previousAction || 'ipv4+ipv6'
-				: widget.value;
-			updateRuleActionFrames(modal);
-		}
 	});
 	document.addEventListener('reset', function(event) {
 		var modal = event.target.closest && event.target.closest('.modal');
@@ -343,15 +303,6 @@ function installDomainListToggle() {
 		setTimeout(function() {
 			updateDomainListFrame(modal);
 			updateRuleActionFrames(modal);
-
-			var action = modal.querySelector('.cbi-value[data-name="action"] select');
-			var checkbox = modal.querySelector(
-				'.cbi-value[data-name="return_nxdomain"] input[type="checkbox"]'
-			);
-			if (action && action.value !== 'nxdomain')
-				action.dataset.previousAction = action.value;
-			if (checkbox)
-				delete checkbox.dataset.previousAction;
 		}, 0);
 	});
 	domainListToggleRegistered = true;
@@ -714,7 +665,7 @@ return view.extend({
 		o = s.option(form.Value, 'cache_size', _('Cache Size'),
 			_('Maximum number of DNS entries kept in the cache.'));
 		o.datatype = 'uinteger';
-		o.default = '8192';
+		o.default = '4096';
 		o.depends('cache_enabled', '1');
 		o = s.option(form.Flag, 'active_preload', _('Active Preload'),
 			_('Refresh cached records shortly before their TTL expires.'));
@@ -790,19 +741,23 @@ return view.extend({
 
 			return true;
 		};
-		o = s.option(form.Flag, 'return_nxdomain', _('Return NXDOMAIN'),
-			_('Return an NXDOMAIN response without querying upstream DNS.'));
+		o = s.option(form.ListValue, 'block', _('Block'),
+			_('Answer matching domains locally without querying upstream DNS. NXDOMAIN Response returns a non-existent domain; Zero-IP Response returns 0.0.0.0 for A and :: for AAAA.'));
 		o.modalonly = true;
-		o.default = '0';
+		o.value('none', _('No Blocking'));
+		o.value('nxdomain', _('NXDOMAIN Response'));
+		o.value('zeroip', _('Zero-IP Response'));
+		o.default = 'none';
 		o.rmempty = false;
 		o.cfgvalue = function(section_id) {
-			return uci.get('updns', section_id, 'action') === 'nxdomain' ? '1' : '0';
+			var action = uci.get('updns', section_id, 'action');
+			return isLocalAnswerAction(action) ? action : 'none';
 		};
 		o.write = function() {
 			return Promise.resolve();
 		};
 		o = addDynamicMultiValueOption(s, 'upstreams', _('Then Query Upstream DNS'),
-			_('Select the upstream servers used for matching domains. No upstream is needed for NXDOMAIN.'),
+			_('Select the upstream servers used for matching domains. No upstream is needed when Block is set.'),
 			function() {
 				return listConfiguredUpstreams(localResolvers);
 			}, dynamicOptionRefreshers);
@@ -828,36 +783,43 @@ return view.extend({
 		o.value('ipv4+ipv6', _('IPv4 + IPv6'));
 		o.value('ipv4only', _('IPv4 Only'));
 		o.value('ipv6only', _('IPv6 Only'));
-		o.value('nxdomain', _('NXDOMAIN'));
 		o.default = 'ipv4+ipv6';
-		var renderActionFrame = o.renderFrame;
-		o.renderFrame = function() {
-			var frame = renderActionFrame.apply(this, arguments);
-			var select = frame.querySelector('select');
-			if (select && select.value !== 'nxdomain')
-				select.dataset.previousAction = select.value;
-			return frame;
+		o.cfgvalue = function(section_id) {
+			var action = uci.get('updns', section_id, 'action');
+			return isLocalAnswerAction(action) || !action ? 'ipv4+ipv6' : action;
+		};
+		o.textvalue = function(section_id) {
+			var action = uci.get('updns', section_id, 'action');
+			if (action === 'nxdomain')
+				return _('NXDOMAIN Response');
+			if (action === 'zeroip')
+				return _('Zero-IP Response');
+			return form.ListValue.prototype.textvalue.apply(this, arguments);
 		};
 		var writeAction = o.write;
-		o.write = function(section_id) {
-			if (isNXDomainSelected()) {
+		o.write = function(section_id, formvalue) {
+			var modal = getActiveRuleModal();
+			var block = modal && modal.querySelector('.cbi-value[data-name="block"] select');
+			if (block && block.value !== 'none') {
 				[ 'upstreams', 'ipv4_nftsets', 'ipv6_nftsets', 'add_upstream_ips' ]
 					.forEach(function(key) {
 						uci.unset('updns', section_id, key);
 					});
+				uci.set('updns', section_id, 'action', block.value);
+				return Promise.resolve();
 			}
 
-			return writeAction.apply(this, arguments);
+			return writeAction.call(this, section_id, formvalue);
 		};
 
 		var handleRuleModalSave = s.handleModalSave;
 		s.handleModalSave = function() {
 			var modal = getActiveRuleModal();
 			var nameWidget = modal && modal.querySelector('.cbi-value[data-name="name"] input');
-			var action = modal &&
-				modal.querySelector('.cbi-value[data-name="action"] select');
+			var block = modal &&
+				modal.querySelector('.cbi-value[data-name="block"] select');
 			var sectionID = nameWidget && nameWidget.id.split('.')[3];
-			var clearIPOptions = action && action.value === 'nxdomain';
+			var clearIPOptions = block && block.value !== 'none';
 
 			return Promise.resolve(handleRuleModalSave.apply(this, arguments)).then(function(result) {
 				if (clearIPOptions && sectionID) {

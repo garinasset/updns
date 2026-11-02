@@ -62,10 +62,10 @@ msgid "Path to a standard resolv.conf file. Its nameserver entries are loaded au
 msgstr "标准 resolv.conf 文件路径；其中的 nameserver 条目会自动加载。"
 
 msgid "Concurrent Query"
-msgstr "并行查询"
+msgstr "并发查询"
 
 msgid "Query selected upstreams in parallel and use the first response; when disabled, try them in order. Disabled by default."
-msgstr "启用时并行查询规则内所选上游 DNS 并采用首个响应；禁用时按顺序逐个尝试；默认禁用。"
+msgstr "启用时并发查询规则内所选上游 DNS 并采用首个响应；禁用时按顺序逐个尝试；默认禁用。"
 
 msgid "Upstream DNS"
 msgstr "上游 DNS"
@@ -220,17 +220,17 @@ msgstr "拖动以调整顺序"
 msgid "No options available"
 msgstr "没有可选项"
 
-msgid "Return NXDOMAIN"
-msgstr "返回 NXDOMAIN"
+msgid "Block"
+msgstr "拦截"
 
-msgid "Return an NXDOMAIN response without querying upstream DNS."
-msgstr "启用后直接返回 NXDOMAIN 响应，不查询上游 DNS。"
+msgid "Answer matching domains locally without querying upstream DNS. NXDOMAIN Response returns a non-existent domain; Zero-IP Response returns 0.0.0.0 for A and :: for AAAA."
+msgstr "匹配的域名由本地直接应答，不查询上游 DNS。“NXDOMAIN 返回”表示域名不存在；“Zero-IP 返回”对 A 记录返回 0.0.0.0，对 AAAA 记录返回 ::。"
 
 msgid "Then Query Upstream DNS"
 msgstr "则查询上游 DNS"
 
-msgid "Select the upstream servers used for matching domains. No upstream is needed for NXDOMAIN."
-msgstr "选择需要使用的上游 DNS；返回结果设置为 NXDOMAIN 响应时, 不需要选择上游 DNS。"
+msgid "Select the upstream servers used for matching domains. No upstream is needed when Block is set."
+msgstr "选择需要使用的上游 DNS；设置了“拦截”时，不需要选择上游 DNS。"
 
 msgid "And Return"
 msgstr "并返回结果"
@@ -247,8 +247,14 @@ msgstr "仅 IPv4"
 msgid "IPv6 Only"
 msgstr "仅 IPv6"
 
-msgid "NXDOMAIN"
-msgstr "NXDOMAIN"
+msgid "No Blocking"
+msgstr "不拦截"
+
+msgid "NXDOMAIN Response"
+msgstr "NXDOMAIN 返回"
+
+msgid "Zero-IP Response"
+msgstr "Zero-IP 返回"
 
 msgid "Add IPv4 Results to NFT Sets"
 msgstr "将 IPv4 结果加入 NFT 集合"

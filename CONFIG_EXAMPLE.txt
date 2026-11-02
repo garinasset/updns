@@ -6,37 +6,38 @@ config updns 'general'
 	option local_resolv_file '/tmp/resolv.conf.d/resolv.conf.auto'
 	option concurrent_query '0'
 	option cache_enabled '1'
-	option cache_size '8192'
+	option cache_size '4096'
 	option active_preload '1'
 	option log_query '0'
 	option log_level 'info'
 
-# The package installs four DoH upstreams by default. These examples show
-# standard UCI syntax for adding other upstreams.
-config upstream 'cloudflare_udp'
+# The package installs five upstreams by default (Tencent-UDP, Google-DoH,
+# Cloudflare-DoH, Tencent-DoH, AdGuard-DoH). These examples show standard UCI
+# syntax for adding other upstreams.
+config upstream
 	option name 'cloudflare_udp'
 	option address '1.1.1.1'
 	option protocol 'udp'
 	option timeout '5'
 
-config upstream 'google_dot'
+config upstream
 	option name 'google_dot'
 	option address 'dns.google:853'
 	option protocol 'dot'
 	option timeout '5'
 
-config upstream 'google_doh'
+config upstream
 	option name 'google_doh'
 	option address 'https://dns.google/dns-query'
 	option protocol 'doh'
 	option timeout '5'
 
-# Domain-list name is the unique rule identifier; file points to a text file with one domain per line.
-config domainlist 'example'
+# Domain-list name is the unique identifier referenced by rules; file points to a text file with one domain per line.
+config domainlist
 	option name 'example-domains'
 	option file '/etc/updns/domainlists/example.txt'
 
-config rule 'example_rule'
+config rule
 	option name 'example_rule'
 	option domain_match '1'
 	list domain_lists 'example-domains'
@@ -46,7 +47,9 @@ config rule 'example_rule'
 	option add_upstream_ips '0'
 	option action 'ipv4+ipv6'
 
-# Supported actions: ipv4+ipv6, ipv4only, ipv6only, nxdomain.
+# Supported actions: ipv4+ipv6, ipv4only, ipv6only, nxdomain, zeroip.
+# nxdomain returns NXDOMAIN; zeroip (Zero-IP Blocking) returns 0.0.0.0 for A and :: for AAAA.
+# Neither queries upstreams or writes nftsets; both responses are cached.
 # Rules are evaluated in file order; LuCI drag-and-drop updates this order.
 # A single rule may set domain_match=0 to act as the final fallback, regardless of row order.
 # Set add_upstream_ips=1 to add the selected upstream endpoint IPs to these nftsets.

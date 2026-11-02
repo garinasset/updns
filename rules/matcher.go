@@ -66,12 +66,12 @@ func (m *Matcher) ClearAllDomainLists() {
 	m.domainLists = make(map[string][]string)
 }
 
-// Match checks if a domain matches any pattern in a domain list
-// Supports exact match and wildcard match (dnsmasq-style)
+// Match checks if a domain matches any pattern in a domain list.
 // Examples:
-// - "example.com" matches "example.com" exactly
-// - "*.example.com" matches "sub.example.com", "deep.sub.example.com", etc.
-// - "example.com" as pattern also matches "www.example.com" (suffix match)
+//   - "example.com" matches "example.com" and its subdomains such as "www.example.com",
+//     but not "superexample.com"
+//   - "*example.com" matches any domain ending in "example.com", including
+//     "example.com", "www.example.com" and "superexample.com"
 func (m *Matcher) Match(domain, listName string) bool {
 	patterns, exists := m.domainLists[listName]
 	if !exists {
@@ -87,36 +87,15 @@ func (m *Matcher) Match(domain, listName string) bool {
 	return false
 }
 
-// matchPattern matches a domain against a pattern (dnsmasq-style)
+// matchPattern matches a domain against a pattern
 func (m *Matcher) matchPattern(domain, pattern string) bool {
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 	pattern = strings.ToLower(strings.TrimSuffix(pattern, "."))
 
-	// Exact match
-	if domain == pattern {
-		return true
+	if strings.HasPrefix(pattern, "*") {
+		return strings.HasSuffix(domain, pattern[1:])
 	}
-
-	// Wildcard match: *.example.com
-	if strings.HasPrefix(pattern, "*.") {
-		suffix := pattern[2:] // Remove "*."
-		if strings.HasSuffix(domain, "."+suffix) {
-			return true
-		}
-		// Also match the suffix itself
-		if domain == suffix {
-			return true
-		}
-	}
-
-	// Suffix match: example.com also matches www.example.com (for patterns without *)
-	if !strings.Contains(pattern, "*") {
-		if strings.HasSuffix(domain, "."+pattern) {
-			return true
-		}
-	}
-
-	return false
+	return domain == pattern || strings.HasSuffix(domain, "."+pattern)
 }
 
 // MatchMultipleListsOR checks if domain matches any of the given lists (OR logic)

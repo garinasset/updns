@@ -26,8 +26,8 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("Expected CacheEnabled to be true by default")
 	}
 
-	if cfg.CacheSize != 8192 {
-		t.Errorf("Expected CacheSize 8192, got %d", cfg.CacheSize)
+	if cfg.CacheSize != 4096 {
+		t.Errorf("Expected CacheSize 4096, got %d", cfg.CacheSize)
 	}
 
 	if !cfg.ActivePreload {

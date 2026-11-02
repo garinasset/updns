@@ -37,12 +37,12 @@ func TestMatchWildcard(t *testing.T) {
 		pattern  string
 		expected bool
 	}{
-		{"sub.example.com", "*.example.com", true},
-		{"deep.sub.example.com", "*.example.com", true},
-		{"example.com", "*.example.com", true},
-		{"sub2.example.com", "*.example.com", true},
-		{"example.org", "*.example.com", false},
-		{"example.com", "*.other.com", false},
+		{"example.com", "*example.com", true},
+		{"www.example.com", "*example.com", true},
+		{"superexample.com", "*example.com", true},
+		{"example.org", "*example.com", false},
+		{"superexample.com", "example.com", false},
+		{"www.example.com", "example.com", true},
 	}
 
 	for _, tt := range tests {

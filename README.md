@@ -2,9 +2,9 @@
 
 **简体中文** | [English](./README.en.md)
 
-UpDNS 是一个基于 [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logoColor=white)](https://go.dev/) 的 OpenWrt 上游 DNS 提供商：对外提供统一的 DNS 服务入口，对内按规则将查询分发至指定的上游 DNS。
+UpDNS 是一个基于 [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logoColor=white)](https://go.dev/) 的 OpenWrt 上游 DNS 提供商：对外提供统一的 DNS 服务入口，对内按规则将查询分发至指定的上游 DNS，支持 UDP、TCP、DoT、DoH。
 
-无论是作为**独立的 DNS 服务器**直接提供解析服务（监听端口可自行设置），还是作为 **dnsmasq 等 DNS 应用的上游 DNS** （默认监听 `153` 端口），UpDNS 都能胜任。
+它既可以作为**独立的 DNS 服务器**直接提供解析服务，也可以作为 **dnsmasq 等 DNS 应用的上游 DNS**。
 
 ## 🧩 技术栈
 
@@ -13,7 +13,7 @@ UpDNS 是一个基于 [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logo
 | [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logoColor=white)](https://go.dev/) | 后端开发语言，编译为单个可执行文件，实现 DNS 服务、规则匹配与缓存 |
 | [![miekg/dns](https://img.shields.io/badge/miekg%2Fdns-00ADD8?logo=go&logoColor=white)](https://github.com/miekg/dns) | Go DNS 库，负责 DNS 报文解析、UDP/TCP 服务与上游查询 |
 | [![DoT](https://img.shields.io/badge/DoT-DNS%20over%20TLS-4285F4)](https://datatracker.ietf.org/doc/html/rfc7858) | 加密的上游 DNS 传输协议，经 TLS 查询上游 |
-| [![DoH](https://img.shields.io/badge/DoH-DNS%20over%20HTTPS-4285F4)](https://datatracker.ietf.org/doc/html/rfc8484) | 基于 HTTPS 的上游 DNS 传输协议；在允许 HTTPS 的网络中可能更易连通，但实际可达性取决于网络策略 |
+| [![DoH](https://img.shields.io/badge/DoH-DNS%20over%20HTTPS-4285F4)](https://datatracker.ietf.org/doc/html/rfc8484) | 基于 HTTPS 的上游 DNS 传输协议 |
 | [![OpenWrt](https://img.shields.io/badge/OpenWrt-00B5E2?logo=openwrt&logoColor=white)](https://openwrt.org/) | 目标运行平台，提供路由器系统、软件包与服务管理 |
 | [![APK](https://img.shields.io/badge/APK-OpenWrt%20Packages-00B5E2?logo=openwrt&logoColor=white)](https://openwrt.org/docs/guide-user/additional-software/apk) | OpenWrt 25.12 起使用的软件包格式，用于分发后端、LuCI 与中文翻译 |
 | [![OpenWrt SDK](https://img.shields.io/badge/OpenWrt%20SDK-00B5E2?logo=openwrt&logoColor=white)](https://openwrt.org/docs/guide-developer/toolchain/using_the_sdk) | 交叉编译与打包工具链，在 Linux x86_64 上构建 APK |
@@ -30,46 +30,50 @@ UpDNS 是一个基于 [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logo
 
 ## 🚀 工作流程
 
-**客户端 → UpDNS → 规则匹配 → 缓存 / 上游 DNS（UDP · TCP · DoT · DoH → NFT SETS → 返回结果**
+**客户端 → UpDNS → 规则匹配 → 缓存 / 上游 DNS（UDP · TCP · DoT · DoH）→ nftset → 返回结果**
 
-UpDNS 作为统一入口接收查询，按规则匹配域名列表，命中缓存则直接返回，否则查询所选上游。只有在规则配置了 nftables 集合且解析结果适用时，UpDNS 才会将地址写入集合；这不是每次查询的必经步骤。
+UpDNS 作为统一入口接收查询，按规则匹配域名列表，命中缓存则直接返回，否则查询所选上游，解析结果可写入指定的 nftset。
 
 ## 💻 CLI 输出示例
 
 以下输出中的域名、地址、规则、上游及 nftables 集合状态均为示意值，实际结果取决于配置、缓存和网络。
 
 ```text
-root@OpenWrt:~# updns sysupgrade.openwrt.org
+root@OpenWrt:~# updns google.com
 
-  DOMAIN
-  ──────────────────────────────────────────
-  Domain       : sysupgrade.openwrt.org.
-  Query Type   : A / AAAA
-  Query Path   : Cache Hit
-
-  DNS RESULT
-  ──────────────────────────────────────────
-  Matched Rule : NL Access
-  Action       : IPv4 + IPv6
-  Response     : NOERROR
-  Upstream     : Cloudflare-DoH
-
-  NFT SETS
-  ──────────────────────────────────────────
-  IPv4         : inet/fw4/nl4
-                 ✓ Contains resolved IPv4
-  IPv6         : inet/fw4/nl6
-                 ✓ Contains resolved IPv6
-
-  ANSWERS
-  ──────────────────────────────────────────
-  • 45.140.183.87
-  • 2001:678:6e1:1001:be24:11ff:fe23:4c6d
+╭─ updns ──────────────────────────────────── ─╮
+│
+│  DOMAIN
+│  ──────────────────────────────────────────
+│  Domain       : google.com.
+│  Query Type   : A / AAAA
+│  Query Path   : Cache Hit
+│
+│  DNS RESULT
+│  ──────────────────────────────────────────
+│  Matched Rule : US Access
+│  Action       : IPv4 + IPv6
+│  Response     : NOERROR
+│  Upstream     : Google-DoH
+│
+│  NFT SETS
+│  ──────────────────────────────────────────
+│  IPv4         : inet/fw4/us4
+│                 ✓ Contains resolved IPv4
+│  IPv6         : inet/fw4/us6
+│                 ✓ Contains resolved IPv6
+│
+│  ANSWERS
+│  ──────────────────────────────────────────
+│  • 142.251.219.142
+│  • 2607:f8b0:4005:818::200e
+│
+╰──────────────────────────────────────────────╯
 ```
 
 ## 🖥️ LuCI 配置示例
 
-安装 UpDNS 与 LuCI 应用后，在 OpenWrt 管理界面进入 **服务 → UpDNS** 即可配置使用，界面包含运行状态、设置选项卡（设置及端口、上游 DNS、域名列表、缓存、日志）和规则列表。配置项旁的 `?` 提示会说明其作用。
+安装 UpDNS 与 LuCI 应用后，在 OpenWrt 管理界面进入 **服务 → UpDNS** 即可配置使用，界面包含运行状态、设置选项卡（设置及端口、上游 DNS、域名列表、缓存、日志）和规则列表。
 
 配置文件位置：
 
@@ -86,7 +90,7 @@ uci commit dhcp
 /etc/init.d/dnsmasq restart
 ```
 
-这样可以避免 dnsmasq 与 UpDNS 各自缓存带来的状态分散，以及规则或上游变更后旧结果仍留在 dnsmasq 缓存中的情况。禁用 dnsmasq 缓存后，转发到 UpDNS 的查询由 UpDNS 管理缓存；UpDNS 日志与 CLI 的 `Cache Hit` / `Upstream Query` 只反映实际到达 UpDNS 的查询，未转发给 UpDNS 的 查询 不会出现在其中。
+这样可以避免 dnsmasq 与 UpDNS 各自缓存带来的状态分散，以及规则或上游变更后旧结果仍留在 dnsmasq 缓存中的情况。禁用 dnsmasq 缓存后，转发到 UpDNS 的查询由 UpDNS 管理缓存；UpDNS 日志与 CLI 的 `Cache Hit` / `Upstream Query` 只反映实际到达 UpDNS 的查询，未转发给 UpDNS 的查询不会出现在其中。
 
 ## 🔗 仓库
 

@@ -220,7 +220,7 @@ func (s *Server) Start() error {
 
 func hasUpstreamNFTSetRules(rules []config.Rule) bool {
 	for _, rule := range rules {
-		if rule.AddUpstreamIPs && normalizeAction(rule.Action) != "nxdomain" &&
+		if rule.AddUpstreamIPs && !isLocalAnswerAction(rule.Action) &&
 			(len(rule.IPv4NFTSets) > 0 || len(rule.IPv6NFTSets) > 0) {
 			return true
 		}
@@ -280,7 +280,7 @@ func (s *Server) refreshUpstreamNFTSets() bool {
 	ipv6BySet := make(map[string]map[string]struct{})
 
 	for _, rule := range s.cfg.Rules {
-		if !rule.AddUpstreamIPs || normalizeAction(rule.Action) == "nxdomain" {
+		if !rule.AddUpstreamIPs || isLocalAnswerAction(rule.Action) {
 			continue
 		}
 		for _, name := range rule.Upstreams {
@@ -574,6 +574,8 @@ func formatQueryLog(domain string, queryType uint16, cacheHit bool, action strin
 		marker = "Cache Hit"
 	} else if normalizeAction(action) == "nxdomain" {
 		marker = "NXDOMAIN RULE"
+	} else if normalizeAction(action) == "zeroip" {
+		marker = "ZERO-IP RULE"
 	}
 	return message + " (" + marker + ")"
 }
@@ -717,8 +719,25 @@ func (s *Server) resolveQueryFrom(domain string, queryType uint16, client string
 		result.Action = matchedRule.Action
 		result.IPv4NFTSets = matchedRule.IPv4NFTSets
 		result.IPv6NFTSets = matchedRule.IPv6NFTSets
-		if normalizeAction(result.Action) == "nxdomain" {
+		switch normalizeAction(result.Action) {
+		case "nxdomain":
 			result.Rcode = dns.RcodeNameError
+			result.TTL = localAnswerTTL
+			return result
+		case "zeroip":
+			result.TTL = localAnswerTTL
+			switch queryType {
+			case dns.TypeA, dns.TypeANY:
+				rr := &dns.A{Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: localAnswerTTL}, A: net.IPv4zero.To4()}
+				result.Records = append(result.Records, rr)
+				result.Answers = append(result.Answers, "0.0.0.0")
+			}
+			switch queryType {
+			case dns.TypeAAAA, dns.TypeANY:
+				rr := &dns.AAAA{Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: localAnswerTTL}, AAAA: net.IPv6zero}
+				result.Records = append(result.Records, rr)
+				result.Answers = append(result.Answers, "::")
+			}
 			return result
 		}
 	}
@@ -896,13 +915,25 @@ func (s *Server) findMatchingRule(domain string) *config.Rule {
 	return fallback
 }
 
+// localAnswerTTL is the TTL of answers a rule produces without querying upstreams.
+const localAnswerTTL = 60
+
+// isLocalAnswerAction reports whether a rule answers without upstreams or nftsets.
+func isLocalAnswerAction(action string) bool {
+	switch normalizeAction(action) {
+	case "nxdomain", "zeroip":
+		return true
+	}
+	return false
+}
+
 func normalizeAction(action string) string {
 	switch action {
 	case "ipv4-only", "ipv4_only", "ipv4only":
 		return "ipv4only"
 	case "ipv6-only", "ipv6_only", "ipv6only":
 		return "ipv6only"
-	case "nxdomain":
+	case "nxdomain", "zeroip":
 		return action
 	case "", "ipv4+ipv6":
 		return "ipv4+ipv6"

@@ -30,41 +30,45 @@ It works equally well as a **standalone DNS server** that answers clients direct
 
 ## 🚀 Workflow
 
-**Client → UpDNS → Rule matching → Cache / Upstream DNS (UDP · TCP · DoT · DoH) → NFT Sets → Response**
+**Client → UpDNS → Rule matching → Cache / Upstream DNS (UDP · TCP · DoT · DoH) → nftset → Response**
 
-UpDNS receives queries at a single entry point and matches the domain against your rules. A cache hit is answered directly; otherwise the selected upstreams are queried. UpDNS writes addresses to nftables sets only when a rule configures a set and the DNS result is applicable; this is not a step in every query.
+UpDNS receives queries at a single entry point and matches the domain against your rules. A cache hit is answered directly; otherwise the selected upstreams are queried. Resolved addresses can be written to the nftsets specified by the rule.
 
 ## 💻 CLI Output Example
 
 The domain, addresses, rule, upstream and nftables set state below are illustrative; actual output depends on configuration, cache state and network conditions.
 
 ```text
-root@OpenWrt:~# updns sysupgrade.openwrt.org
+root@OpenWrt:~# updns google.com
 
-  DOMAIN
-  ──────────────────────────────────────────
-  Domain       : sysupgrade.openwrt.org.
-  Query Type   : A / AAAA
-  Query Path   : Cache Hit
-
-  DNS RESULT
-  ──────────────────────────────────────────
-  Matched Rule : NL Access
-  Action       : IPv4 + IPv6
-  Response     : NOERROR
-  Upstream     : Cloudflare-DoH
-
-  NFT SETS
-  ──────────────────────────────────────────
-  IPv4         : inet/fw4/nl4
-                 ✓ Contains resolved IPv4
-  IPv6         : inet/fw4/nl6
-                 ✓ Contains resolved IPv6
-
-  ANSWERS
-  ──────────────────────────────────────────
-  • 45.140.183.87
-  • 2001:678:6e1:1001:be24:11ff:fe23:4c6d
+╭─ updns ──────────────────────────────────── ─╮
+│
+│  DOMAIN
+│  ──────────────────────────────────────────
+│  Domain       : google.com.
+│  Query Type   : A / AAAA
+│  Query Path   : Cache Hit
+│
+│  DNS RESULT
+│  ──────────────────────────────────────────
+│  Matched Rule : US Access
+│  Action       : IPv4 + IPv6
+│  Response     : NOERROR
+│  Upstream     : Google-DoH
+│
+│  NFT SETS
+│  ──────────────────────────────────────────
+│  IPv4         : inet/fw4/us4
+│                 ✓ Contains resolved IPv4
+│  IPv6         : inet/fw4/us6
+│                 ✓ Contains resolved IPv6
+│
+│  ANSWERS
+│  ──────────────────────────────────────────
+│  • 142.251.219.142
+│  • 2607:f8b0:4005:818::200e
+│
+╰──────────────────────────────────────────────╯
 ```
 
 ## 🖥️ LuCI Configuration
