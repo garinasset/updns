@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-updns
-PKG_VERSION:=1.0.29
+PKG_VERSION:=1.0.31
 PKG_RELEASE:=1
 PKG_LICENSE:=Apache-2.0
 PKG_PO_VERSION:=$(PKG_VERSION)

@@ -419,6 +419,25 @@ function ruleReturnBadge(section_id) {
 	return ruleBadges([ [ ruleBadge('return', texts[action] || action) ] ]);
 }
 
+function isEmptyValue(value) {
+	if (Array.isArray(value))
+		return value.length === 0;
+
+	return value == null || String(value).trim() === '';
+}
+
+function requireValue(option, message, skip) {
+	var validate = option.validate;
+
+	option.optional = true;
+	option.validate = function(section_id, value) {
+		if (isEmptyValue(value))
+			return skip && skip() ? true : message;
+
+		return validate ? validate.apply(this, arguments) : true;
+	};
+}
+
 function addRuleColumn(section, key, title, render) {
 	var option = section.option(form.DummyValue, key, title);
 	option.modalonly = false;
@@ -886,11 +905,12 @@ return view.extend({
 			return Promise.resolve();
 		};
 		o = addDynamicMultiValueOption(s, 'upstreams', _('Then Query Upstream DNS'),
-			_('Select the upstream servers used for matching domains. No upstream is needed when Block is set.'),
+			_('Select the upstream servers used for matching domains (required). No upstream is needed when Block is set.'),
 			function() {
 				return listConfiguredUpstreams(localResolvers);
 			}, dynamicOptionRefreshers);
 		o.modalonly = true;
+		requireValue(o, _('Select at least one upstream DNS.'), isNXDomainSelected);
 		hideAndClearOptionForNXDomain(o, 'upstreams');
 		o = addMultiValueOption(s, 'ipv4_nftsets', _('Add IPv4 Results to NFT Sets'),
 			_('Select system nftables sets that receive resolved IPv4 addresses.'),

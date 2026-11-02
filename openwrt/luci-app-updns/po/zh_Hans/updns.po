@@ -118,8 +118,6 @@ msgstr "域名列表文件"
 msgid "A unique identifier shown in rule selectors."
 msgstr "规则选择器中显示的唯一名称。"
 
-msgid "A domain list name is required."
-msgstr "域名列表名称不能为空。"
 
 msgid "Domain list names must be unique."
 msgstr "域名列表名称必须唯一。"
@@ -224,13 +222,13 @@ msgid "Block"
 msgstr "拦截"
 
 msgid "Answer matching domains locally without querying upstream DNS. NXDOMAIN Response returns a non-existent domain; Zero-IP Response returns 0.0.0.0 for A and :: for AAAA."
-msgstr "匹配的域名由本地直接应答，不查询上游 DNS。“NXDOMAIN 返回”表示域名不存在；“Zero-IP 返回”对 A 记录返回 0.0.0.0，对 AAAA 记录返回 ::。"
+msgstr "使用拦截时, 匹配的域名由本地直接应答，不查询上游 DNS。“NXDOMAIN 返回”表示域名不存在；“Zero-IP 返回”对 A 记录返回 0.0.0.0，对 AAAA 记录返回 ::。"
 
 msgid "Then Query Upstream DNS"
 msgstr "则查询上游 DNS"
 
-msgid "Select the upstream servers used for matching domains. No upstream is needed when Block is set."
-msgstr "选择需要使用的上游 DNS；设置了“拦截”时，不需要选择上游 DNS。"
+msgid "Select the upstream servers used for matching domains (required). No upstream is needed when Block is set."
+msgstr "选择需要使用的上游 DNS（必选）；设置了“拦截”时，不需要选择上游 DNS。"
 
 msgid "And Return"
 msgstr "并返回结果"
@@ -294,3 +292,12 @@ msgstr "上游 DNS IP → NFT"
 
 msgid "Local Answer"
 msgstr "本地应答"
+
+
+
+
+
+
+
+msgid "Select at least one upstream DNS."
+msgstr "请至少选择一个上游 DNS。"
