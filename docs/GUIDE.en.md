@@ -153,7 +153,7 @@ Enabling the cache only in UpDNS is recommended, to avoid the extra state-debugg
 ```text
 root@OpenWrt:~# updns google.com
 
-╭─ updns ──────────────────────────────────── ─╮
+╭─ updns ──────────────────────────────────────╮
 │
 │  DOMAIN
 │  ──────────────────────────────────────────
@@ -164,9 +164,9 @@ root@OpenWrt:~# updns google.com
 │  DNS RESULT
 │  ──────────────────────────────────────────
 │  Matched Rule : US Access
+│  Upstream     : Google-DoH
 │  Action       : IPv4 + IPv6
 │  Response     : NOERROR
-│  Upstream     : Google-DoH
 │
 │  NFT SETS
 │  ──────────────────────────────────────────
@@ -184,6 +184,8 @@ root@OpenWrt:~# updns google.com
 ```
 
 When the service is running, the CLI queries through the local control interface, using the service's rules and cache and showing nftables set information; when the service is not running, it queries independently without the service cache. By default it performs A and AAAA queries separately.
+
+When a query fails the full report is still printed: `Response` shows `ERROR` and an `ERRORS` section gives one normalized short reason per query type (for example `Upstream timeout`, `Upstream connection refused`, `Upstream host unresolvable`, `Network not ready`, `No upstream configured`, `All upstreams failed`), and the command exits non-zero. If only one of A/AAAA fails, the other result is shown normally and the exit code is 0 as long as one succeeds. The frame width adapts to the terminal (minimum 48, maximum 80 columns).
 
 ## Service Management
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -914,5 +915,22 @@ func TestPTRFailureCachedBriefly(t *testing.T) {
 	srv.resolveQuery(ptrName, dns.TypePTR)
 	if got := queries.Load(); got != 4 {
 		t.Fatalf("ClearCache should clear PTR failures: upstream queried %d times, want 4", got)
+	}
+}
+
+func TestFailureReason(t *testing.T) {
+	tests := map[string]string{
+		"all upstreams failed for x.: u: UDP query failed for 1.1.1.1:53: read udp: i/o timeout": "Upstream timeout",
+		"u: UDP query failed: dial udp: connect: connection refused":                             "Upstream connection refused",
+		"u: DoH query failed for https://h: dial tcp: lookup h: no such host":                    "Upstream host unresolvable",
+		"something odd": "All upstreams failed",
+	}
+	for msg, want := range tests {
+		if got := failureReason(errors.New(msg)); got != want {
+			t.Errorf("failureReason(%q) = %q, want %q", msg, got, want)
+		}
+	}
+	if got := failureReason(errNoUpstream); got != "No upstream configured" {
+		t.Errorf("got %q", got)
 	}
 }

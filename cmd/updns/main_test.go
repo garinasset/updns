@@ -48,19 +48,19 @@ func TestWriteQueryOutputFormatsAlignedFields(t *testing.T) {
 	text := output.String()
 
 	for _, want := range []string{
-		"  DOMAIN",
-		"  Domain       : example.com.",
-		"  Query Type   : A / AAAA",
-		"  Query Path   : A=Upstream Query / AAAA=Cache Hit",
-		"  Matched Rule : example",
-		"  Action       : IPv4 + IPv6",
-		"  Response     : NOERROR",
-		"  Upstream     : Cloudflare-DoH",
-		"  IPv4         : inet/fw4/example4",
-		"                 ✓ Contains resolved IPv4",
-		"  IPv6         : inet/fw4/example6",
-		"                 — No IPv6 answer",
-		"  • 192.0.2.1",
+		"│  DOMAIN",
+		"│  Domain       : example.com.",
+		"│  Query Type   : A / AAAA",
+		"│  Query Path   : A=Upstream Query / AAAA=Cache Hit",
+		"│  Matched Rule : example",
+		"│  Action       : IPv4 + IPv6",
+		"│  Response     : NOERROR",
+		"│  Upstream     : Cloudflare-DoH",
+		"│  IPv4         : inet/fw4/example4",
+		"│                 ✓ Contains resolved IPv4",
+		"│  IPv6         : inet/fw4/example6",
+		"│                 — No IPv6 answer",
+		"│  • 192.0.2.1",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("output does not contain %q:\n%s", want, text)
@@ -69,12 +69,16 @@ func TestWriteQueryOutputFormatsAlignedFields(t *testing.T) {
 
 	colonPositions := make(map[int]bool)
 	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(line, "  ") && strings.Contains(line, " : ") {
+		if strings.HasPrefix(line, "│  ") && strings.Contains(line, " : ") {
 			colonPositions[strings.Index(line, ":")] = true
 		}
 	}
 	if len(colonPositions) != 1 {
 		t.Errorf("field colons are not aligned: positions %v\n%s", colonPositions, text)
+	}
+	lines := strings.Split(text, "\n")
+	if w := len([]rune(lines[1])); w != 48 || len([]rune(lines[len(lines)-3])) != 48 {
+		t.Errorf("frame width = %d, want 48\n%s", w, text)
 	}
 	if !strings.HasSuffix(text, "\n\n") {
 		t.Errorf("output must end with a blank line, got suffix %q", text[len(text)-min(len(text), 10):])
@@ -127,6 +131,21 @@ func TestRegisterUpstreamsKeepsEachUpstreamDistinct(t *testing.T) {
 		got := registered[want.Name]
 		if got == nil || got.Address != want.Address || got.Protocol != want.Protocol {
 			t.Fatalf("upstream %s registered as %+v, want address %s protocol %s", want.Name, got, want.Address, want.Protocol)
+		}
+	}
+}
+
+func TestWriteQueryOutputShowsFailureReason(t *testing.T) {
+	results := []*server.QueryResult{
+		{Domain: "baidu.jp.", QueryType: "A", Action: "ipv4+ipv6", Rcode: dns.RcodeServerFailure, Error: "Upstream timeout"},
+		{Domain: "baidu.jp.", QueryType: "AAAA", Action: "ipv4+ipv6", Rcode: dns.RcodeServerFailure, Error: "Upstream timeout"},
+	}
+	var output bytes.Buffer
+	writeQueryOutput(&output, results)
+	text := output.String()
+	for _, want := range []string{"│  Response     : ERROR", "│  ERRORS", "│  A            : Upstream timeout", "│  AAAA         : Upstream timeout", "│  (none)"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("output does not contain %q:\n%s", want, text)
 		}
 	}
 }

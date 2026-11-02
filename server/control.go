@@ -146,12 +146,12 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 
 	results, err := s.QueryDomain(request.Domain)
 	if s.logQuery {
-		if len(results) == 0 && err != nil {
-			logging.Infof("CLI query %s A/AAAA failed: %v", request.Domain, err)
-		} else {
-			for _, result := range results {
-				logging.Infof("CLI %s", formatQueryLog(result.Domain, queryTypeCode(result.QueryType), result.CacheHit, result.Action))
+		for _, result := range results {
+			if result.Error != "" {
+				logging.Infof("CLI query %s %s failed: %s", request.Domain, result.QueryType, result.Error)
+				continue
 			}
+			logging.Infof("CLI %s", formatQueryLog(result.Domain, queryTypeCode(result.QueryType), result.CacheHit, result.Action))
 		}
 	}
 	response := controlResponse{Results: results}
@@ -174,13 +174,17 @@ func (s *Server) QueryDomain(domain string) ([]*QueryResult, error) {
 	for _, queryType := range []uint16{dns.TypeA, dns.TypeAAAA} {
 		result, err := s.Query(domain, queryType)
 		if err != nil {
+			failed := s.queryMetadata(dns.Fqdn(domain), queryType)
+			failed.Rcode = dns.RcodeServerFailure
+			failed.Error = failureReason(err)
+			results = append(results, failed)
 			queryErrors = append(queryErrors, fmt.Errorf("%s query failed: %w", dns.TypeToString[queryType], err))
 			continue
 		}
 		results = append(results, result)
 	}
-	if len(results) == 0 {
-		return nil, errors.Join(queryErrors...)
+	if len(queryErrors) == len(results) {
+		return results, errors.Join(queryErrors...)
 	}
 	return results, nil
 }

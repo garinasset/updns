@@ -41,7 +41,7 @@ UpDNS 作为统一入口接收查询，按规则匹配域名列表，命中缓�
 ```text
 root@OpenWrt:~# updns google.com
 
-╭─ updns ──────────────────────────────────── ─╮
+╭─ updns ──────────────────────────────────────╮
 │
 │  DOMAIN
 │  ──────────────────────────────────────────
@@ -52,9 +52,9 @@ root@OpenWrt:~# updns google.com
 │  DNS RESULT
 │  ──────────────────────────────────────────
 │  Matched Rule : US Access
+│  Upstream     : Google-DoH
 │  Action       : IPv4 + IPv6
 │  Response     : NOERROR
-│  Upstream     : Google-DoH
 │
 │  NFT SETS
 │  ──────────────────────────────────────────

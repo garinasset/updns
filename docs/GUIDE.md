@@ -154,7 +154,7 @@ uci commit dhcp
 ```text
 root@OpenWrt:~# updns google.com
 
-╭─ updns ──────────────────────────────────── ─╮
+╭─ updns ──────────────────────────────────────╮
 │
 │  DOMAIN
 │  ──────────────────────────────────────────
@@ -165,9 +165,9 @@ root@OpenWrt:~# updns google.com
 │  DNS RESULT
 │  ──────────────────────────────────────────
 │  Matched Rule : US Access
+│  Upstream     : Google-DoH
 │  Action       : IPv4 + IPv6
 │  Response     : NOERROR
-│  Upstream     : Google-DoH
 │
 │  NFT SETS
 │  ──────────────────────────────────────────
@@ -185,6 +185,8 @@ root@OpenWrt:~# updns google.com
 ```
 
 服务运行时，CLI 通过本机控制接口查询，使用服务的规则、缓存并显示 nftables 集合信息；服务未运行时会独立查询，不使用服务缓存。查询默认分别执行 A 和 AAAA 查询。
+
+查询失败时仍会输出完整报告：`Response` 显示 `ERROR`，并新增 `ERRORS` 分区，按查询类型给出一行规范化的简短原因（如 `Upstream timeout`、`Upstream connection refused`、`Upstream host unresolvable`、`Network not ready`、`No upstream configured`、`All upstreams failed`），命令以非 0 退出码结束。仅 A 或 AAAA 之一失败时，另一类结果照常显示，只要有一类成功退出码即为 0。边框宽度自适应终端宽度（最小 48、最大 80 列）。
 
 ## 服务管理
 

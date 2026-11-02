@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/syslog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/garinasset/updns/logging"
 	"github.com/garinasset/updns/server"
 	"github.com/miekg/dns"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -43,13 +46,17 @@ func main() {
 		if *domain == "" {
 			fatalf("domain is required for query action")
 		}
-		queryDomain(*domain)
+		if !queryDomain(*domain) {
+			os.Exit(1)
+		}
 	case "status":
 		statusService()
 	default:
 		if flag.NArg() > 0 {
 			// If first argument looks like a domain, treat as query
-			queryDomain(flag.Arg(0))
+			if !queryDomain(flag.Arg(0)) {
+				os.Exit(1)
+			}
 		} else {
 			flag.PrintDefaults()
 		}
@@ -163,11 +170,14 @@ func statusService() {
 	fmt.Println("Get service status")
 }
 
-func queryDomain(domain string) {
+// queryDomain prints the query report and reports whether any lookup succeeded.
+func queryDomain(domain string) bool {
 	results, err := server.QueryRunningService(domain)
 	if err != nil {
 		if !server.ControlSocketUnavailable(err) {
-			fatalf("Failed to query UpDNS service: %v", err)
+			results = []*server.QueryResult{serviceFailure(domain, err)}
+			writeQueryOutput(os.Stdout, results)
+			return false
 		}
 
 		cfg, configErr := loadConfig()
@@ -193,9 +203,6 @@ func queryDomain(domain string) {
 
 		results, err = srv.QueryDomain(domain)
 		logStandaloneQueries(cfg.LogQuery && logLevelIncludesInfo(cfg.LogLevel), domain, results, err)
-		if err != nil {
-			fatalf("Failed to resolve %s: %v", domain, err)
-		}
 	}
 
 	if len(results) == 0 {
@@ -203,6 +210,30 @@ func queryDomain(domain string) {
 	}
 
 	writeQueryOutput(os.Stdout, results)
+	for _, result := range results {
+		if result.Error == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// serviceFailure describes a failure to talk to the running service.
+func serviceFailure(domain string, err error) *server.QueryResult {
+	reason := "Service query failed"
+	switch {
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		reason = "Service closed the connection"
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		reason = "Service query timeout"
+	}
+	return &server.QueryResult{
+		Domain:    dns.Fqdn(domain),
+		QueryType: "Service",
+		Action:    "ipv4+ipv6",
+		Rcode:     dns.RcodeServerFailure,
+		Error:     reason,
+	}
 }
 
 func logStandaloneQueries(enabled bool, domain string, results []*server.QueryResult, queryErr error) {
@@ -269,10 +300,55 @@ func fatalf(format string, args ...any) {
 	os.Exit(1)
 }
 
-const queryFieldWidth = 12
+const (
+	queryFieldWidth = 12
+	boxMinWidth     = 48
+	boxMaxWidth     = 80
+	boxPrefix       = "│  "
+	boxTitle        = "updns"
+)
+
+// boxWidth is the total width of the output frame, set per render.
+var boxWidth = boxMinWidth
+
+func terminalWidth(out io.Writer) int {
+	if f, ok := out.(*os.File); ok {
+		if ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 {
+			return int(ws.Col)
+		}
+	}
+	if cols, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && cols > 0 {
+		return cols
+	}
+	return boxMinWidth
+}
+
+func adaptiveBoxWidth(out io.Writer) int {
+	width := terminalWidth(out)
+	if width > boxMaxWidth {
+		width = boxMaxWidth
+	}
+	if width < boxMinWidth {
+		width = boxMinWidth
+	}
+	return width
+}
+
+func writeBoxTop(out io.Writer) {
+	head := "╭─ " + boxTitle + " "
+	fmt.Fprintf(out, "%s%s╮\n", head, strings.Repeat("─", boxWidth-len([]rune(head))-1))
+}
+
+func writeBoxBottom(out io.Writer) {
+	fmt.Fprintf(out, "╰%s╯\n", strings.Repeat("─", boxWidth-2))
+}
 
 func writeQueryOutput(out io.Writer, results []*server.QueryResult) {
 	domain := results[0].Domain
+	boxWidth = adaptiveBoxWidth(out)
+
+	fmt.Fprintln(out)
+	writeBoxTop(out)
 
 	writeSection(out, "DOMAIN")
 	writeField(out, "Domain", domain)
@@ -281,8 +357,6 @@ func writeQueryOutput(out io.Writer, results []*server.QueryResult) {
 
 	writeSection(out, "DNS RESULT")
 	writeField(out, "Matched Rule", matchedRule(results))
-	writeField(out, "Action", displayAction(results[0].Action))
-	writeField(out, "Response", responseCode(results))
 	upstream := joinedUnique(results, func(result *server.QueryResult) string {
 		return result.UsedUpstream
 	})
@@ -290,6 +364,8 @@ func writeQueryOutput(out io.Writer, results []*server.QueryResult) {
 		upstream = "(none)"
 	}
 	writeField(out, "Upstream", upstream)
+	writeField(out, "Action", displayAction(results[0].Action))
+	writeField(out, "Response", responseCode(results))
 
 	ipv4Sets, ipv4Membership := nftMembership(results, true)
 	ipv6Sets, ipv6Membership := nftMembership(results, false)
@@ -297,6 +373,19 @@ func writeQueryOutput(out io.Writer, results []*server.QueryResult) {
 		writeSection(out, "NFT SETS")
 		writeNFTField(out, "IPv4", ipv4Sets, ipv4Membership, addressFamilyState(results, "A"), "resolved IPv4")
 		writeNFTField(out, "IPv6", ipv6Sets, ipv6Membership, addressFamilyState(results, "AAAA"), "resolved IPv6")
+	}
+
+	var failures []*server.QueryResult
+	for _, result := range results {
+		if result.Error != "" {
+			failures = append(failures, result)
+		}
+	}
+	if len(failures) > 0 {
+		writeSection(out, "ERRORS")
+		for _, result := range failures {
+			writeField(out, result.QueryType, result.Error)
+		}
 	}
 
 	writeSection(out, "ANSWERS")
@@ -312,21 +401,23 @@ func writeQueryOutput(out io.Writer, results []*server.QueryResult) {
 		}
 	}
 	if len(answers) == 0 {
-		fmt.Fprintln(out, "  (none)")
+		fmt.Fprintf(out, "%s(none)\n", boxPrefix)
 	} else {
 		for _, answer := range answers {
-			fmt.Fprintf(out, "  • %s\n", answer)
+			fmt.Fprintf(out, "%s• %s\n", boxPrefix, answer)
 		}
 	}
+	fmt.Fprintln(out, "│")
+	writeBoxBottom(out)
 	fmt.Fprintln(out)
 }
 
 func writeSection(out io.Writer, title string) {
-	fmt.Fprintf(out, "\n  %s\n  ──────────────────────────────────────────\n", title)
+	fmt.Fprintf(out, "│\n%s%s\n%s%s\n", boxPrefix, title, boxPrefix, strings.Repeat("─", boxWidth-6))
 }
 
 func writeField(out io.Writer, label, value string) {
-	fmt.Fprintf(out, "  %-*s : %s\n", queryFieldWidth, label, value)
+	fmt.Fprintf(out, "%s%-*s : %s\n", boxPrefix, queryFieldWidth, label, value)
 }
 
 func writeNFTField(out io.Writer, label string, sets []string, membership map[string]bool, hasAnswers *bool, addressFamily string) {
@@ -336,12 +427,12 @@ func writeNFTField(out io.Writer, label string, sets []string, membership map[st
 	}
 	writeField(out, label, value)
 	if hasAnswers == nil {
-		fmt.Fprintf(out, "                 — %s query unavailable\n", addressFamily)
+		fmt.Fprintf(out, "│                 — %s query unavailable\n", addressFamily)
 		return
 	}
 	if !*hasAnswers {
 		family := strings.TrimPrefix(addressFamily, "resolved ")
-		fmt.Fprintf(out, "                 — No %s answer\n", family)
+		fmt.Fprintf(out, "│                 — No %s answer\n", family)
 		return
 	}
 	for _, setName := range sets {
@@ -352,9 +443,9 @@ func writeNFTField(out io.Writer, label string, sets []string, membership map[st
 			contains, doesNotContain = "contains", "does not contain"
 		}
 		if membership[setName] {
-			fmt.Fprintf(out, "                 ✓ %s%s %s\n", detail, contains, addressFamily)
+			fmt.Fprintf(out, "│                 ✓ %s%s %s\n", detail, contains, addressFamily)
 		} else {
-			fmt.Fprintf(out, "                 ✗ %s%s %s\n", detail, doesNotContain, addressFamily)
+			fmt.Fprintf(out, "│                 ✗ %s%s %s\n", detail, doesNotContain, addressFamily)
 		}
 	}
 }
@@ -363,6 +454,9 @@ func addressFamilyState(results []*server.QueryResult, queryType string) *bool {
 	for _, result := range results {
 		if result.QueryType != queryType {
 			continue
+		}
+		if result.Error != "" {
+			return nil
 		}
 		hasAnswers := len(result.Answers) > 0
 		return &hasAnswers
@@ -429,6 +523,9 @@ func responseCode(results []*server.QueryResult) string {
 		name := dns.RcodeToString[result.Rcode]
 		if name == "" {
 			name = fmt.Sprintf("RCODE %d", result.Rcode)
+		}
+		if result.Error != "" {
+			name = "ERROR"
 		}
 		codes = append(codes, result.QueryType+"="+name)
 	}

@@ -41,7 +41,7 @@ The domain, addresses, rule, upstream and nftables set state below are illustrat
 ```text
 root@OpenWrt:~# updns google.com
 
-╭─ updns ──────────────────────────────────── ─╮
+╭─ updns ──────────────────────────────────────╮
 │
 │  DOMAIN
 │  ──────────────────────────────────────────
@@ -52,9 +52,9 @@ root@OpenWrt:~# updns google.com
 │  DNS RESULT
 │  ──────────────────────────────────────────
 │  Matched Rule : US Access
+│  Upstream     : Google-DoH
 │  Action       : IPv4 + IPv6
 │  Response     : NOERROR
-│  Upstream     : Google-DoH
 │
 │  NFT SETS
 │  ──────────────────────────────────────────

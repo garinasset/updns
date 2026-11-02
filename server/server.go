@@ -112,6 +112,8 @@ type QueryResult struct {
 	Authority    []dns.RR        `json:"-"`
 	Rcode        int             `json:"rcode"`
 	TTL          uint32          `json:"ttl"`
+	// Error is a short, normalized failure reason; set only when the query failed.
+	Error string `json:"error,omitempty"`
 }
 
 // NewServer creates a new DNS server
@@ -453,9 +455,12 @@ func (s *Server) queryFrom(domain string, queryType uint16, client string) (*Que
 		}
 	}
 
-	result := s.resolveQueryFrom(domain, queryType, client)
+	result, resolveErr := s.resolveQueryDetail(domain, queryType, client)
 	if result == nil {
-		return nil, fmt.Errorf("DNS resolution failed for %s", domain)
+		if resolveErr == nil {
+			resolveErr = fmt.Errorf("DNS resolution failed for %s", domain)
+		}
+		return nil, resolveErr
 	}
 	if s.cache != nil && result.TTL > 0 {
 		now := time.Now()
@@ -703,6 +708,12 @@ func (s *Server) resolveQuery(domain string, queryType uint16) *QueryResult {
 // resolveQueryFrom is resolveQuery with the requesting client's address, used
 // for failure logs.
 func (s *Server) resolveQueryFrom(domain string, queryType uint16, client string) *QueryResult {
+	result, _ := s.resolveQueryDetail(domain, queryType, client)
+	return result
+}
+
+// resolveQueryDetail also returns the failure cause when the result is nil.
+func (s *Server) resolveQueryDetail(domain string, queryType uint16, client string) (*QueryResult, error) {
 	result := &QueryResult{
 		Domain:     domain,
 		QueryType:  dns.TypeToString[queryType],
@@ -723,7 +734,7 @@ func (s *Server) resolveQueryFrom(domain string, queryType uint16, client string
 		case "nxdomain":
 			result.Rcode = dns.RcodeNameError
 			result.TTL = localAnswerTTL
-			return result
+			return result, nil
 		case "zeroip":
 			result.TTL = localAnswerTTL
 			switch queryType {
@@ -738,19 +749,19 @@ func (s *Server) resolveQueryFrom(domain string, queryType uint16, client string
 				result.Records = append(result.Records, rr)
 				result.Answers = append(result.Answers, "::")
 			}
-			return result
+			return result, nil
 		}
 	}
 
 	failKey := fmt.Sprintf("%s:%d", domain, queryType)
 	svcb := isSVCBType(queryType)
 	if svcb && s.svcbFailureActive(failKey) {
-		return result
+		return result, nil
 	}
 	ptr := queryType == dns.TypePTR
 	if ptr && s.ptrFailures.active(failKey) {
 		logging.Debugf("DNS resolution failed for %s %s (%s), recent failure cached for %s", domain, result.QueryType, ruleContext(failureRule(result), client), ptrFailureTTL)
-		return nil
+		return nil, errCachedFailure
 	}
 
 	// Other types have no overall deadline: each upstream uses its own timeout.
@@ -768,7 +779,7 @@ func (s *Server) resolveQueryFrom(domain string, queryType uint16, client string
 		// Use default upstreams
 		defaults := s.upstreamsSnapshot()
 		if len(defaults) == 0 {
-			return nil
+			return nil, errNoUpstream
 		}
 
 		upstreamNames := make([]string, len(defaults))
@@ -795,13 +806,16 @@ func (s *Server) resolveQueryFrom(domain string, queryType uint16, client string
 			s.recordSVCBFailure(failKey)
 			logging.Debugf("DNS resolution failed for %s %s (rule: %s), cached as empty answer for %s: %v", domain, result.QueryType, rule, svcbFailureTTL, err)
 			result.UsedUpstream = ""
-			return result
+			return result, nil
 		}
 		if ptr && !errors.Is(err, resolver.ErrNetworkNotReady) {
 			s.ptrFailures.record(failKey)
 		}
 		s.logResolveFailure(domain, result.QueryType, rule, client, err)
-		return nil
+		if err == nil {
+			err = errors.New("no response")
+		}
+		return nil, err
 	}
 
 	result.Rcode = resp.Rcode
@@ -855,7 +869,43 @@ func (s *Server) resolveQueryFrom(domain string, queryType uint16, client string
 		}
 	}
 
-	return result
+	return result, nil
+}
+
+var (
+	errCachedFailure = errors.New("recent failure cached")
+	errNoUpstream    = errors.New("no upstream configured")
+)
+
+// failureReason maps a resolution error to a short, normalized reason.
+func failureReason(err error) string {
+	if err == nil {
+		return "Unknown error"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, errNoUpstream):
+		return "No upstream configured"
+	case errors.Is(err, resolver.ErrNetworkNotReady):
+		return "Network not ready"
+	case errors.Is(err, resolver.ErrUpstreamNotFound), strings.Contains(msg, "not found"):
+		return "Upstream not found"
+	case strings.Contains(msg, "no such host"), strings.Contains(msg, "server misbehaving"):
+		return "Upstream host unresolvable"
+	case strings.Contains(msg, "connection refused"):
+		return "Upstream connection refused"
+	case strings.Contains(msg, "tls:"), strings.Contains(msg, "x509"):
+		return "Upstream TLS error"
+	case strings.Contains(msg, "http "):
+		return "Upstream HTTP error"
+	case strings.Contains(msg, "timeout"), strings.Contains(msg, "deadline exceeded"):
+		return "Upstream timeout"
+	case strings.Contains(msg, "unreachable"):
+		return "Network unreachable"
+	case strings.Contains(msg, "dns response"):
+		return "Upstream returned an error response"
+	}
+	return "All upstreams failed"
 }
 
 func (s *Server) populateNFTMembership(result *QueryResult) {
