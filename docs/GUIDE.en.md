@@ -50,7 +50,7 @@ A plain domain matches the exact domain and its subdomains: `example.com` matche
 
 ### Rule Behavior
 
-Rules are evaluated in order and evaluation stops at the first applicable match. A rule may reference multiple domain lists; matching any one of them satisfies the domain condition. LuCI supports drag-and-drop ordering of regular rules; when adding a rule, turning off "Domain Matching" makes it a fallback rule. There can be at most one fallback rule and it always runs after the regular rules.
+Rules are evaluated in order and evaluation stops at the first applicable match. A rule may reference multiple domain lists; matching any one of them satisfies the domain condition. LuCI supports drag-and-drop ordering of regular rules; selecting "Do Not Match (Fallback Rule)" in the rule's "If the Domain Matches" drop-down (`domain_match='0'`) makes it a fallback rule. There can be at most one fallback rule and it always runs after the regular rules.
 
 | Action | Behavior |
 |---|---|
@@ -118,7 +118,7 @@ On a fresh install `enabled=0`, so the service does not start automatically. Def
 
 The "Block" drop-down in the rule editor (No Blocking / NXDOMAIN Response / Zero-IP Response) is a UI control for the `action` field, not a separate UCI field: NXDOMAIN Response maps to `action='nxdomain'` and Zero-IP Response to `action='zeroip'`. Selecting either hides and clears the upstream, nftables set, and "And Return" options.
 
-A rule with "Domain Matching" turned off is a fallback rule. Only one is allowed; it runs after no other rule has matched, and the LuCI page automatically keeps it after the regular rules.
+A rule that selects "Do Not Match (Fallback Rule)" (`domain_match='0'`) is a fallback rule. Only one is allowed; it runs after no other rule has matched, and the LuCI page automatically keeps it after the regular rules.
 
 ### Frontend Files and Maintenance Notes
 

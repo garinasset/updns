@@ -184,12 +184,6 @@ msgstr "规则"
 msgid "Drag domain-matching rules to change their evaluation order. The first matching rule is applied. A fallback rule is always kept at the bottom and is used only when no domain-matching rule matches."
 msgstr "拖动域名匹配规则可调整其匹配顺序；按列表顺序应用首个匹配规则。兜底规则始终自动固定在列表末尾，仅当所有域名匹配规则均未命中时执行。"
 
-msgid "Domain Matching"
-msgstr "域名匹配"
-
-msgid "Match this rule against the selected domain lists. Set it to No to make this the only fallback rule; it is applied last."
-msgstr "是否匹配域名列表。如果显示为 No 则该规则是最后且唯一的兜底规则。"
-
 msgid "Only one fallback rule is allowed."
 msgstr "最多只能配置一条兜底规则。"
 
@@ -202,8 +196,14 @@ msgstr "在 日志 和 Cli 输出结果中显示的简短名称。"
 msgid "If the Domain Matches"
 msgstr "如果域名匹配"
 
-msgid "Select one or more domain lists. A match in any selected list triggers this rule."
-msgstr "选择一个或多个域名列表；匹配任一列表时触发此规则。"
+msgid "Select one or more domain lists. A match in any selected list triggers this rule. Select \"Do Not Match (Fallback Rule)\" to skip domain matching; the rule then becomes the only fallback rule and applies last, when no other rule matches. It cannot be combined with domain lists."
+msgstr "选择一个或多个域名列表，匹配任一列表时触发此规则；选择“不执行匹配（兜底规则）”则不匹配域名，作为最后且唯一的兜底规则，仅在所有其他规则均未命中时执行；该选项与域名列表不能同时选择。"
+
+msgid "Do Not Match (Fallback Rule)"
+msgstr "不执行匹配（兜底规则）"
+
+msgid "\"Do Not Match (Fallback Rule)\" cannot be combined with domain lists."
+msgstr "“不执行匹配（兜底规则）”不能与域名列表同时选择。"
 
 msgid "Already used by rule: %s"
 msgstr "已被规则“%s”引用"

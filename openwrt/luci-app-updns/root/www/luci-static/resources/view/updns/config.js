@@ -24,6 +24,7 @@ var callCacheSize = rpc.declare({
 var statusPollRegistered = false;
 var domainListToggleRegistered = false;
 var originalUciMove;
+var NO_MATCH = '__no_match__';
 
 function parseLocalResolvers(content, configuredUpstreams) {
 	var addresses = {};
@@ -95,11 +96,14 @@ function addDynamicMultiValueOption(section, key, title, description, getValues,
 }
 
 function listDomainLists() {
-	return (uci.sections('updns', 'domainlist') || []).map(function(section) {
+	var lists = (uci.sections('updns', 'domainlist') || []).map(function(section) {
 		var path = section.file || section.path || '';
 		var name = section.name || section['.name'];
 		return { value: name, label: name + ' (' + path + ')' };
 	});
+
+	lists.unshift({ value: NO_MATCH, label: _('Do Not Match (Fallback Rule)') });
+	return lists;
 }
 
 function getDomainListValues(value) {
@@ -117,6 +121,8 @@ function listDomainListOwners(exceptSectionID) {
 			return;
 
 		var ruleName = rule.name || rule['.name'];
+		if (isFallbackRule(rule))
+			owners[NO_MATCH] = owners[NO_MATCH] || ruleName;
 		getDomainListValues(rule.domain_lists).forEach(function(name) {
 			owners[name] = owners[name] || ruleName;
 		});
@@ -151,10 +157,6 @@ function markUnavailableDomainLists(frame, sectionID) {
 
 function isFallbackRule(rule) {
 	return rule.domain_match === '0';
-}
-
-function hasFallbackRule() {
-	return (uci.sections('updns', 'rule') || []).some(isFallbackRule);
 }
 
 function moveFallbackRuleToLast() {
@@ -205,22 +207,6 @@ function updateFallbackDragHandles(root) {
 			? _('Fallback rules are always kept last.')
 			: _('Drag to reorder');
 	});
-}
-
-function updateDomainListFrame(modal) {
-	if (!modal)
-		return;
-
-	var domainLists = modal.querySelector('.cbi-value[data-name="domain_lists"]');
-	if (!domainLists)
-		return;
-
-	var domainMatch = modal.querySelector(
-		'.cbi-value[data-name="domain_match"] input[type="checkbox"][data-widget-id$=".domain_match"]'
-	);
-	domainLists.style.display = hasFallbackRule() || !domainMatch || domainMatch.checked
-		? ''
-		: 'none';
 }
 
 function isLocalAnswerAction(value) {
@@ -284,16 +270,37 @@ function installDomainListToggle() {
 			return;
 
 		var modal = widget.closest('.modal');
-		if (widget.matches('input[type="checkbox"][data-widget-id$=".domain_match"]')) {
-			updateDomainListFrame(modal);
-			return;
-		}
-
 		if (!modal)
 			return;
 
 		if (widget.matches('.cbi-value[data-name="block"] select'))
 			updateRuleActionFrames(modal);
+	});
+	document.addEventListener('cbi-dropdown-change', function(event) {
+		var node = event.target;
+		if (!node.closest || !node.closest('.cbi-value[data-name="domain_lists"]'))
+			return;
+
+		var frame = node.closest('.cbi-value[data-name="domain_lists"]');
+		var instance = event.detail && event.detail.instance;
+		if (!instance || instance.noMatchBusy)
+			return;
+
+		var values = getDomainListValues(instance.getValue());
+		var hadNoMatch = frame.dataset.hadNoMatch === '1';
+		var hasNoMatch = values.indexOf(NO_MATCH) !== -1;
+
+		if (hasNoMatch && values.length > 1) {
+			instance.noMatchBusy = true;
+			values = hadNoMatch
+				? values.filter(function(value) { return value !== NO_MATCH; })
+				: [ NO_MATCH ];
+			instance.setValue(values);
+			instance.noMatchBusy = false;
+			hasNoMatch = values.indexOf(NO_MATCH) !== -1;
+		}
+
+		frame.dataset.hadNoMatch = hasNoMatch ? '1' : '0';
 	});
 	document.addEventListener('reset', function(event) {
 		var modal = event.target.closest && event.target.closest('.modal');
@@ -301,7 +308,6 @@ function installDomainListToggle() {
 			return;
 
 		setTimeout(function() {
-			updateDomainListFrame(modal);
 			updateRuleActionFrames(modal);
 		}, 0);
 	});
@@ -693,36 +699,43 @@ return view.extend({
 		o = s.option(form.Value, 'name', _('Rule Name'),
 			_('A short name shown in logs and CLI output.'));
 		o.rmempty = false;
-		o = s.option(form.Flag, 'domain_match', _('Domain Matching'),
-			_('Match this rule against the selected domain lists. Set it to No to make this the only fallback rule; it is applied last.'));
-		o.default = '1';
-		o.rmempty = false;
-		o.cfgvalue = function(section_id) {
-			return uci.get('updns', section_id, 'domain_match') || '1';
-		};
-		var renderDomainMatchFrame = o.renderFrame;
-		o.renderFrame = function(section_id, in_table, option_index, nodes) {
-			var frame = renderDomainMatchFrame.call(this, section_id, in_table, option_index, nodes);
-			if (hasFallbackRule())
-				frame.style.display = 'none';
-			return frame;
-		};
-		o.validate = function(section_id, value) {
-			if (value !== '0')
-				return true;
-			var duplicate = (uci.sections('updns', 'rule') || []).some(function(rule) {
-				return rule['.name'] !== section_id && isFallbackRule(rule);
-			});
-			return duplicate ? _('Only one fallback rule is allowed.') : true;
-		};
 		o = addDynamicMultiValueOption(s, 'domain_lists', _('If the Domain Matches'),
-			_('Select one or more domain lists. A match in any selected list triggers this rule.'),
+			_('Select one or more domain lists. A match in any selected list triggers this rule. Select "Do Not Match (Fallback Rule)" to skip domain matching; the rule then becomes the only fallback rule and applies last, when no other rule matches. It cannot be combined with domain lists.'),
 			listDomainLists, dynamicOptionRefreshers);
-		o.rmempty = true;
+		o.rmempty = false;
+		o.forcewrite = true;
+		o.cfgvalue = function(section_id) {
+			if (uci.get('updns', section_id, 'domain_match') === '0')
+				return [ NO_MATCH ];
+			return uci.get('updns', section_id, 'domain_lists');
+		};
+		o.write = function(section_id, value) {
+			var values = getDomainListValues(value);
+			if (values.indexOf(NO_MATCH) !== -1) {
+				uci.set('updns', section_id, 'domain_match', '0');
+				uci.unset('updns', section_id, 'domain_lists');
+			}
+			else {
+				uci.set('updns', section_id, 'domain_match', '1');
+				uci.set('updns', section_id, 'domain_lists', values);
+			}
+			return Promise.resolve();
+		};
+		o.remove = function() {
+			return Promise.resolve();
+		};
+		var domainListsTextvalue = o.textvalue;
+		o.textvalue = function(section_id) {
+			if (uci.get('updns', section_id, 'domain_match') === '0')
+				return _('Do Not Match (Fallback Rule)');
+			return domainListsTextvalue.apply(this, arguments);
+		};
 		var renderDomainListsFrame = o.renderFrame;
 		o.renderFrame = function(section_id) {
 			var frame = renderDomainListsFrame.apply(this, arguments);
 			markUnavailableDomainLists(frame, section_id);
+			frame.dataset.hadNoMatch =
+				uci.get('updns', section_id, 'domain_match') === '0' ? '1' : '0';
 			return frame;
 		};
 		o.validate = function(section_id, value) {
@@ -730,11 +743,18 @@ return view.extend({
 			var current = (uci.sections('updns', 'rule') || []).find(function(rule) {
 				return rule['.name'] === section_id;
 			});
-			var currentValues = getDomainListValues(current && current.domain_lists);
+			var currentValues = current && isFallbackRule(current)
+				? [ NO_MATCH ]
+				: getDomainListValues(current && current.domain_lists);
 			var owners = listDomainListOwners(section_id);
+
+			if (selected.indexOf(NO_MATCH) !== -1 && selected.length > 1)
+				return _('"Do Not Match (Fallback Rule)" cannot be combined with domain lists.');
 
 			for (var i = 0; i < selected.length; i++) {
 				var owner = owners[selected[i]];
+				if (owner && selected[i] === NO_MATCH && currentValues.indexOf(NO_MATCH) === -1)
+					return _('Only one fallback rule is allowed.');
 				if (owner && currentValues.indexOf(selected[i]) === -1)
 					return _('Domain list %s is already used by rule %s.').format(selected[i], owner);
 			}
@@ -753,7 +773,16 @@ return view.extend({
 			var action = uci.get('updns', section_id, 'action');
 			return isLocalAnswerAction(action) ? action : 'none';
 		};
-		o.write = function() {
+		o.forcewrite = true;
+		o.write = function(section_id, formvalue) {
+			if (formvalue !== 'none') {
+				uci.set('updns', section_id, 'action', formvalue);
+				return Promise.resolve();
+			}
+
+			var modal = getActiveRuleModal();
+			var action = modal && modal.querySelector('.cbi-value[data-name="action"] select');
+			uci.set('updns', section_id, 'action', action ? action.value : 'ipv4+ipv6');
 			return Promise.resolve();
 		};
 		o = addDynamicMultiValueOption(s, 'upstreams', _('Then Query Upstream DNS'),
@@ -794,7 +823,8 @@ return view.extend({
 				return _('NXDOMAIN Response');
 			if (action === 'zeroip')
 				return _('Zero-IP Response');
-			return form.ListValue.prototype.textvalue.apply(this, arguments);
+			var idx = this.keylist.indexOf(action || 'ipv4+ipv6');
+			return idx >= 0 ? this.vallist[idx] : action;
 		};
 		var writeAction = o.write;
 		o.write = function(section_id, formvalue) {
