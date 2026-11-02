@@ -25,6 +25,7 @@ var (
 	action     = flag.String("action", "", "Action: start, stop, restart, reload, query")
 	domain     = flag.String("domain", "", "Domain to query (for query action)")
 	verbose    = flag.Bool("v", false, "Verbose output")
+	useSyslog  = flag.Bool("syslog", false, "Write logs to syslog with per-level priorities")
 )
 
 func main() {
@@ -256,7 +257,7 @@ func logStandaloneQueries(enabled bool, domain string, results []*server.QueryRe
 	}
 
 	for _, result := range results {
-		if err := writer.Info(fmt.Sprintf("CLI standalone %s", queryLogLine(result))); err != nil {
+		if err := writer.Info(server.FormatQueryLog("CLI Query", result, "", "")); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: cannot write standalone query to system log: %v\n", err)
 			return
 		}
@@ -272,18 +273,6 @@ func logLevelIncludesInfo(level string) bool {
 	}
 }
 
-func queryLogLine(result *server.QueryResult) string {
-	path := "Upstream Query"
-	if result.CacheHit {
-		path = "Cache Hit"
-	} else if strings.EqualFold(result.Action, "nxdomain") {
-		path = "NXDOMAIN RULE"
-	} else if strings.EqualFold(result.Action, "zeroip") {
-		path = "ZERO-IP RULE"
-	}
-	return fmt.Sprintf("Query: %s %s (%s)", result.Domain, result.QueryType, path)
-}
-
 func loadConfig() (*config.Config, error) {
 	cfg, err := config.LoadFromUCI(*configFile)
 	if err != nil {
@@ -291,6 +280,11 @@ func loadConfig() (*config.Config, error) {
 	}
 	if err := logging.SetLevel(cfg.LogLevel); err != nil {
 		return nil, err
+	}
+	if *useSyslog {
+		if err := logging.UseSyslog("updns"); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: cannot use syslog, falling back to stderr: %v\n", err)
+		}
 	}
 	return cfg, nil
 }

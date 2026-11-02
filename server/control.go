@@ -147,11 +147,7 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 	results, err := s.QueryDomain(request.Domain)
 	if s.logQuery {
 		for _, result := range results {
-			if result.Error != "" {
-				logging.Infof("CLI query %s %s failed: %s", request.Domain, result.QueryType, result.Error)
-				continue
-			}
-			logging.Infof("CLI %s", formatQueryLog(result.Domain, queryTypeCode(result.QueryType), result.CacheHit, result.Action))
+			logging.Infof("%s", FormatQueryLog("CLI Query", result, "", ""))
 		}
 	}
 	response := controlResponse{Results: results}
@@ -187,13 +183,4 @@ func (s *Server) QueryDomain(domain string) ([]*QueryResult, error) {
 		return results, errors.Join(queryErrors...)
 	}
 	return results, nil
-}
-
-func queryTypeCode(queryType string) uint16 {
-	for code, name := range dns.TypeToString {
-		if name == queryType {
-			return code
-		}
-	}
-	return dns.TypeA
 }

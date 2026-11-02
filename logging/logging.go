@@ -21,9 +21,10 @@ const (
 var (
 	mu          sync.RWMutex
 	level       = InfoLevel
-	infoLogger  = log.New(os.Stdout, "INFO ", log.LstdFlags)
-	warnLogger  = log.New(os.Stderr, "WARN ", log.LstdFlags)
-	errorLogger = log.New(os.Stderr, "ERROR ", log.LstdFlags)
+	debugLogger = log.New(os.Stdout, "DEBUG ", 0)
+	infoLogger  = log.New(os.Stdout, "INFO ", 0)
+	warnLogger  = log.New(os.Stderr, "WARN ", 0)
+	errorLogger = log.New(os.Stderr, "ERROR ", 0)
 )
 
 func SetLevel(value string) error {
@@ -55,7 +56,7 @@ func DebugEnabled() bool {
 }
 
 func Debugf(format string, args ...any) {
-	write(DebugLevel, infoLogger, format, args...)
+	write(DebugLevel, debugLogger, format, args...)
 }
 
 func Infof(format string, args ...any) {
@@ -81,8 +82,9 @@ func write(messageLevel Level, output *log.Logger, format string, args ...any) {
 
 func setOutputs(info, warning, failure io.Writer) {
 	mu.Lock()
-	infoLogger = log.New(info, "INFO ", log.LstdFlags)
-	warnLogger = log.New(warning, "WARN ", log.LstdFlags)
-	errorLogger = log.New(failure, "ERROR ", log.LstdFlags)
+	debugLogger = log.New(info, "DEBUG ", 0)
+	infoLogger = log.New(info, "INFO ", 0)
+	warnLogger = log.New(warning, "WARN ", 0)
+	errorLogger = log.New(failure, "ERROR ", 0)
 	mu.Unlock()
 }

@@ -394,39 +394,43 @@ func TestStopRemovesCacheStatusFile(t *testing.T) {
 	}
 }
 
-func TestFormatQueryLogIncludesCacheHit(t *testing.T) {
+func TestFormatQueryLog(t *testing.T) {
 	tests := []struct {
-		name     string
-		cacheHit bool
-		action   string
-		want     string
+		name   string
+		kind   string
+		result QueryResult
+		client string
+		ecs    string
+		want   string
 	}{
-		{name: "upstream query", want: "Query: example.com. A (Upstream Query)"},
-		{name: "cache hit", cacheHit: true, want: "Query: example.com. A (Cache Hit)"},
-		{name: "NXDOMAIN rule", action: "nxdomain", want: "Query: example.com. A (NXDOMAIN RULE)"},
-		{name: "Zero-IP rule", action: "zeroip", want: "Query: example.com. A (ZERO-IP RULE)"},
+		{
+			name:   "server cache hit",
+			kind:   "SRV Query",
+			result: QueryResult{Domain: "qq.com.", QueryType: "A", CacheHit: true, MatchedRule: "默认"},
+			client: "127.0.0.1", ecs: "127.0.0.1/32",
+			want: "SRV Query | qq.com. | A | 默认 | Cache Hit | NOERROR | client@127.0.0.1 | ecs@127.0.0.1/32",
+		},
+		{
+			name:   "nxdomain rule without ecs",
+			kind:   "SRV Query",
+			result: QueryResult{Domain: "ads.example.com.", QueryType: "A", MatchedRule: "adblock", Action: "nxdomain", Rcode: dns.RcodeNameError},
+			client: "192.168.1.23",
+			want:   "SRV Query | ads.example.com. | A | adblock | NXDOMAIN RULE | NXDOMAIN | client@192.168.1.23 | -",
+		},
+		{
+			name:   "cli failure",
+			kind:   "CLI Query",
+			result: QueryResult{Domain: "baidu.jp.", QueryType: "AAAA", MatchedRule: "JP Access", Error: "x"},
+			want:   "CLI Query | baidu.jp. | AAAA | JP Access | Upstream Query | SERVFAIL | - | -",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := formatQueryLog("example.com.", dns.TypeA, tt.cacheHit, tt.action); got != tt.want {
-				t.Fatalf("formatQueryLog() = %q, want %q", got, tt.want)
+			if got := FormatQueryLog(tt.kind, &tt.result, tt.client, tt.ecs); got != tt.want {
+				t.Fatalf("FormatQueryLog() =\n%q\nwant\n%q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestFormatDNSQueryLogIncludesClientAndECS(t *testing.T) {
-	got := formatDNSQueryLog("example.com.", dns.TypeA, false, "", "192.168.1.1", "192.168.1.0/24")
-	want := "Query: example.com. A (Upstream Query) client=192.168.1.1 ecs=192.168.1.0/24"
-	if got != want {
-		t.Fatalf("formatDNSQueryLog() = %q, want %q", got, want)
-	}
-
-	got = formatDNSQueryLog("example.com.", dns.TypeA, true, "", "192.168.1.1", "")
-	want = "Query: example.com. A (Cache Hit) client=192.168.1.1"
-	if got != want {
-		t.Fatalf("formatDNSQueryLog() without ECS = %q, want %q", got, want)
 	}
 }
 

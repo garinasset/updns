@@ -553,12 +553,12 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 
 		result, err := s.queryFrom(domain, queryType, client)
 		if s.logQuery {
-			cacheHit := err == nil && result.CacheHit
-			action := ""
-			if err == nil {
-				action = result.Action
+			logResult := result
+			if err != nil {
+				logResult = s.queryMetadata(domain, queryType)
+				logResult.Rcode = dns.RcodeServerFailure
 			}
-			logging.Infof("%s", formatDNSQueryLog(domain, queryType, cacheHit, action, client, ecs))
+			logging.Infof("%s", FormatQueryLog("SRV Query", logResult, client, ecs))
 		}
 		if err != nil {
 			m.SetRcode(r, dns.RcodeServerFailure)
@@ -572,28 +572,41 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func formatQueryLog(domain string, queryType uint16, cacheHit bool, action string) string {
-	message := fmt.Sprintf("Query: %s %s", domain, dns.TypeToString[queryType])
-	marker := "Upstream Query"
-	if cacheHit {
-		marker = "Cache Hit"
-	} else if normalizeAction(action) == "nxdomain" {
-		marker = "NXDOMAIN RULE"
-	} else if normalizeAction(action) == "zeroip" {
-		marker = "ZERO-IP RULE"
+// FormatQueryLog renders one query log line with " | " separated columns.
+func FormatQueryLog(kind string, result *QueryResult, client, ecs string) string {
+	path := "Upstream Query"
+	if result.CacheHit {
+		path = "Cache Hit"
+	} else if normalizeAction(result.Action) == "nxdomain" {
+		path = "NXDOMAIN RULE"
+	} else if normalizeAction(result.Action) == "zeroip" {
+		path = "ZERO-IP RULE"
 	}
-	return message + " (" + marker + ")"
+	rcode := result.Rcode
+	if result.Error != "" {
+		rcode = dns.RcodeServerFailure
+	}
+	rcodeText, ok := dns.RcodeToString[rcode]
+	if !ok {
+		rcodeText = fmt.Sprintf("RCODE%d", rcode)
+	}
+	return fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s",
+		kind,
+		result.Domain,
+		result.QueryType,
+		logValue("", result.MatchedRule),
+		path,
+		rcodeText,
+		logValue("client@", client),
+		logValue("ecs@", ecs),
+	)
 }
 
-func formatDNSQueryLog(domain string, queryType uint16, cacheHit bool, action, client, ecs string) string {
-	message := formatQueryLog(domain, queryType, cacheHit, action)
-	if client != "" {
-		message += " client=" + client
+func logValue(prefix, value string) string {
+	if value == "" {
+		return "-"
 	}
-	if ecs != "" {
-		message += " ecs=" + ecs
-	}
-	return message
+	return prefix + value
 }
 
 func clientSubnet(message *dns.Msg) string {
