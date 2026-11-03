@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -75,7 +76,7 @@ func TestNegativeSOATTLOnWireAndCache(t *testing.T) {
 	}
 }
 
-func TestFailedNegativePreloadRetainsLiveNXDOMAIN(t *testing.T) {
+func TestUncacheableNegativePreloadRetainsLiveNXDOMAIN(t *testing.T) {
 	var calls atomic.Int32
 	var fail atomic.Bool
 	srv := newNegativeTestServer(t, &calls, func(response *dns.Msg) {
@@ -101,6 +102,76 @@ func TestFailedNegativePreloadRetainsLiveNXDOMAIN(t *testing.T) {
 	if calls.Load() != 2 || !stored.CreatedAt.Equal(entry.CreatedAt) ||
 		!stored.ExpireTime.Equal(entry.ExpireTime) || result.Authority[0].Header().Ttl > 10 {
 		t.Fatal("failed refresh extended or replaced cached NXDOMAIN")
+	}
+}
+
+func TestNegativeFallbackOnWireAndNoCache(t *testing.T) {
+	for _, concurrent := range []bool{false, true} {
+		for _, code := range []int{dns.RcodeSuccess, dns.RcodeNameError} {
+			for _, chain := range []string{"direct", "completed", "inline"} {
+				if code == dns.RcodeSuccess && chain == "inline" {
+					continue
+				}
+				t.Run(fmt.Sprintf("concurrent=%t/%s/%s", concurrent, dns.RcodeToString[code], chain), func(t *testing.T) {
+					var calls atomic.Int32
+					srv := newNegativeTestServer(t, &calls, func(response *dns.Msg) {
+						response.Ns = nil
+						response.Rcode = code
+						if chain != "direct" && response.Question[0].Name == "negative.example." {
+							response.Answer = []dns.RR{&dns.CNAME{
+								Hdr:    dns.RR_Header{Name: "negative.example.", Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 300},
+								Target: "terminal.example.",
+							}}
+							if chain == "completed" {
+								response.Rcode = dns.RcodeSuccess
+							}
+						}
+					})
+					srv.cfg.ConcurrentQuery = concurrent
+					pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+					if err != nil {
+						t.Fatal(err)
+					}
+					ready := make(chan struct{})
+					listener := &dns.Server{
+						PacketConn: pc, Handler: dns.HandlerFunc(srv.handleQuery),
+						NotifyStartedFunc: func() { close(ready) },
+					}
+					go func() {
+						if err := listener.ActivateAndServe(); err != nil {
+							t.Errorf("serve downstream DNS: %v", err)
+						}
+					}()
+					<-ready
+					defer listener.Shutdown()
+					client := &dns.Client{Timeout: time.Second}
+					for _, queryType := range []uint16{dns.TypeA, dns.TypeAAAA} {
+						query := new(dns.Msg)
+						query.SetQuestion("negative.example.", queryType)
+						for pass := 0; pass < 2; pass++ {
+							response, _, err := client.Exchange(query, pc.LocalAddr().String())
+							if err != nil {
+								t.Fatal(err)
+							}
+							wantAnswers := 0
+							if chain != "direct" {
+								wantAnswers = 1
+							}
+							if response.Rcode != code || len(response.Ns) != 0 || len(response.Answer) != wantAnswers {
+								t.Fatalf("wire fallback lost RCODE/CNAME or synthesized authority: %v", response)
+							}
+						}
+					}
+					wantCalls := int32(4)
+					if chain == "completed" {
+						wantCalls *= 2
+					}
+					if calls.Load() != wantCalls || srv.cache.Size() != 0 {
+						t.Fatalf("fallback was cached: calls=%d want=%d cache=%d", calls.Load(), wantCalls, srv.cache.Size())
+					}
+				})
+			}
+		}
 	}
 }
 

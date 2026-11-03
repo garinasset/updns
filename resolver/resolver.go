@@ -213,7 +213,7 @@ func (r *Resolver) ResolveMultiple(ctx context.Context, domain string, queryType
 	for _, name := range upstreamNames {
 		if err := ctx.Err(); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) && fallback != nil {
-				logging.Debugf("using uncacheable NOERROR fallback for %s from %s after deadline", domain, fallbackName)
+				logging.Debugf("using uncacheable %s fallback for %s from %s after deadline", dns.RcodeToString[fallback.Rcode], domain, fallbackName)
 				return fallback, fallbackName, nil
 			}
 			return nil, "", err
@@ -238,7 +238,7 @@ func (r *Resolver) ResolveMultiple(ctx context.Context, domain string, queryType
 		return nil, "", ctx.Err()
 	}
 	if fallback != nil {
-		logging.Debugf("using uncacheable NOERROR fallback for %s from %s; no complete answer", domain, fallbackName)
+		logging.Debugf("using uncacheable %s fallback for %s from %s; no complete answer", dns.RcodeToString[fallback.Rcode], domain, fallbackName)
 		return fallback, fallbackName, nil
 	}
 	return nil, "", allUpstreamsFailed(domain, failures, allNotReady)
@@ -281,7 +281,7 @@ func (r *Resolver) ResolveConcurrent(ctx context.Context, domain string, queryTy
 		case result := <-respChan:
 			if err := ctx.Err(); err != nil {
 				if errors.Is(err, context.DeadlineExceeded) && fallback != nil {
-					logging.Debugf("using uncacheable NOERROR fallback for %s from %s after deadline", domain, fallbackName)
+					logging.Debugf("using uncacheable %s fallback for %s from %s after deadline", dns.RcodeToString[fallback.Rcode], domain, fallbackName)
 					return fallback, fallbackName, nil
 				}
 				return nil, "", err
@@ -302,7 +302,7 @@ func (r *Resolver) ResolveConcurrent(ctx context.Context, domain string, queryTy
 			failures = append(failures, upstreamFailure(result.name, result.msg, result.err))
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) && fallback != nil {
-				logging.Debugf("using uncacheable NOERROR fallback for %s from %s after deadline", domain, fallbackName)
+				logging.Debugf("using uncacheable %s fallback for %s from %s after deadline", dns.RcodeToString[fallback.Rcode], domain, fallbackName)
 				return fallback, fallbackName, nil
 			}
 			return nil, "", ctx.Err()
@@ -313,7 +313,7 @@ func (r *Resolver) ResolveConcurrent(ctx context.Context, domain string, queryTy
 		return nil, "", ctx.Err()
 	}
 	if fallback != nil {
-		logging.Debugf("using uncacheable NOERROR fallback for %s from %s; no complete answer", domain, fallbackName)
+		logging.Debugf("using uncacheable %s fallback for %s from %s; no complete answer", dns.RcodeToString[fallback.Rcode], domain, fallbackName)
 		return fallback, fallbackName, nil
 	}
 	return nil, "", allUpstreamsFailed(domain, failures, allNotReady)
@@ -379,12 +379,16 @@ func (r *Resolver) query(ctx context.Context, domain string, queryType uint16, u
 				}
 			}
 			return combined, nil
-		} else if resp.Rcode != dns.RcodeSuccess || strings.EqualFold(name, msg.Question[0].Name) {
-			if resp.Rcode == dns.RcodeSuccess && len(resp.Answer) == 0 && len(resp.Ns) == 0 &&
-				strings.EqualFold(name, msg.Question[0].Name) {
+		} else {
+			// NXDOMAIN already denies the chain terminal; NOERROR must first
+			// complete an explicit terminal query before it can be a fallback.
+			if uncacheableNegative(combined) && (resp.Rcode == dns.RcodeNameError ||
+				len(resp.Answer) == 0 && strings.EqualFold(name, msg.Question[0].Name)) {
 				return combined, nil
 			}
-			return nil, err
+			if resp.Rcode != dns.RcodeSuccess || strings.EqualFold(name, msg.Question[0].Name) {
+				return nil, err
+			}
 		}
 		msg = new(dns.Msg)
 		msg.SetQuestion(name, queryType)
@@ -539,14 +543,36 @@ func validateResponse(query, response *dns.Msg) error {
 	return errors.New("DNS response has no terminal answer or enclosing SOA for a negative answer")
 }
 
-// Accepted only after an explicitly queried terminal returned NOERROR with
-// empty answer and authority sections; never sufficient for negative caching.
+// NOERROR requires an explicitly queried empty terminal; NXDOMAIN itself
+// denies the terminal. Neither can supply a negative-cache lifetime without SOA.
 func uncacheableNegative(response *dns.Msg) bool {
-	if response == nil || response.Rcode != dns.RcodeSuccess || len(response.Question) != 1 || len(response.Ns) != 0 {
+	if response == nil || (response.Rcode != dns.RcodeSuccess && response.Rcode != dns.RcodeNameError) ||
+		response.Truncated || len(response.Question) != 1 || len(response.Ns) != 0 {
 		return false
 	}
 	_, positive, err := responseTerminal(response.Question[0], response)
-	return err == nil && !positive
+	if err != nil || positive {
+		return false
+	}
+	aliases := make(map[string]string, len(response.Answer))
+	for _, rr := range response.Answer {
+		cname, ok := rr.(*dns.CNAME)
+		if !ok || cname.Hdr.Class != response.Question[0].Qclass {
+			return false
+		}
+		name, target := strings.ToLower(cname.Hdr.Name), strings.ToLower(cname.Target)
+		if previous, exists := aliases[name]; exists && previous != target {
+			return false
+		}
+		aliases[name] = target
+	}
+	name := strings.ToLower(response.Question[0].Name)
+	var followed int
+	for target, ok := aliases[name]; ok; target, ok = aliases[name] {
+		followed++
+		name = target
+	}
+	return followed == len(aliases)
 }
 
 func responseTerminal(question dns.Question, response *dns.Msg) (string, bool, error) {

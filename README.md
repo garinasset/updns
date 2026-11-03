@@ -2,7 +2,7 @@
 
 **简体中文** | [English](./README.en.md)
 
-UpDNS 是一个基于 [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logoColor=white)](https://go.dev/) 的 OpenWrt 上游 DNS 提供商：对外提供统一的 DNS 服务入口，对内按规则将查询分发至指定的上游 DNS，支持 UDP、TCP、DoT、DoH。
+UpDNS 是一个基于 [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logoColor=white)](https://go.dev/) 的 OpenWrt 上游 DNS 提供商：对外提供统一的 DNS 服务入口，对内按规则将查询分发至指定的上游 DNS，支持 UDP、TCP、DoT、DoH, 支持 nftset。
 
 它既可以作为**独立的 DNS 服务器**直接提供解析服务，也可以作为 **dnsmasq 等 DNS 应用的上游 DNS**。
 
