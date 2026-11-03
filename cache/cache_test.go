@@ -210,3 +210,58 @@ func TestCacheReturnsDecrementedTTLWithoutMutatingStoredRecord(t *testing.T) {
 		t.Fatalf("Get mutated the stored record: TTL = %d", got)
 	}
 }
+
+func TestRefreshPreservesHitsReceivedAfterScan(t *testing.T) {
+	c := NewCache(4)
+	defer c.Stop()
+	now := time.Now()
+	c.Set("key", &CacheEntry{TTL: 100, CreatedAt: now.Add(-80 * time.Second), ExpireTime: now.Add(20 * time.Second), HitCount: 7})
+	scanned := c.GetEntriesNeedingPreload()[0]
+	for i := 0; i < 3; i++ {
+		if _, ok := c.Get("key"); !ok {
+			t.Fatal("entry unexpectedly expired")
+		}
+	}
+	replacement := &CacheEntry{TTL: 200, CreatedAt: now, ExpireTime: now.Add(200 * time.Second)}
+	if !c.Refresh("key", scanned, replacement) {
+		t.Fatal("refresh should succeed")
+	}
+	got := c.GetAllEntries()[0]
+	if got.HitCount != 10 || got.TTL != 200 || !got.CreatedAt.Equal(now) {
+		t.Fatalf("refresh lost hits or timestamps: %#v", got)
+	}
+	if replacement.HitCount != 0 {
+		t.Fatal("refresh mutated caller's entry")
+	}
+}
+
+func TestRefreshDoesNotOverwriteReplacedOrRemovedEntry(t *testing.T) {
+	for _, action := range []string{"replace", "remove", "clear"} {
+		t.Run(action, func(t *testing.T) {
+			c := NewCache(4)
+			defer c.Stop()
+			now := time.Now()
+			c.Set("key", &CacheEntry{TTL: 100, CreatedAt: now.Add(-80 * time.Second), ExpireTime: now.Add(20 * time.Second)})
+			scanned := c.GetEntriesNeedingPreload()[0]
+			next := &CacheEntry{TTL: 200, CreatedAt: now, ExpireTime: now.Add(200 * time.Second), HitCount: 5}
+			switch action {
+			case "replace":
+				c.Set("key", next)
+			case "remove":
+				c.Remove("key")
+			case "clear":
+				c.Clear()
+			}
+			if c.Refresh("key", scanned, next) {
+				t.Fatal("stale refresh should not be committed")
+			}
+			if action == "replace" {
+				if got := c.GetAllEntries()[0]; got.HitCount != 5 {
+					t.Fatalf("new entry was changed: %#v", got)
+				}
+			} else if c.Size() != 0 {
+				t.Fatal("refresh resurrected a removed entry")
+			}
+		})
+	}
+}

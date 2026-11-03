@@ -22,6 +22,7 @@ import (
 // unreachablePause is how long an upstream is skipped after its network was
 // found unreachable, before a single probe query is let through.
 const unreachablePause = 2 * time.Second
+const maxCNAMEHops = 16
 
 var (
 	// ErrUpstreamNotFound means a rule referenced an upstream that is not registered.
@@ -110,6 +111,9 @@ func (r *Resolver) ReplaceUpstreamsWithPrefix(prefix string, upstreams []*config
 
 // Resolve performs DNS resolution against a specific upstream
 func (r *Resolver) Resolve(ctx context.Context, domain string, queryType uint16, upstreamName string) (*dns.Msg, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	upstream, exists := r.upstreams[upstreamName]
 	r.mu.RUnlock()
@@ -204,9 +208,24 @@ func (r *Resolver) ResolveMultiple(ctx context.Context, domain string, queryType
 
 	var failures []string
 	allNotReady := true
+	var fallback *dns.Msg
+	var fallbackName string
 	for _, name := range upstreamNames {
+		if err := ctx.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) && fallback != nil {
+				logging.Debugf("using uncacheable NOERROR fallback for %s from %s after deadline", domain, fallbackName)
+				return fallback, fallbackName, nil
+			}
+			return nil, "", err
+		}
 		resp, err := r.Resolve(ctx, domain, queryType, name)
-		if err == nil && usableResponse(resp) {
+		if err == nil {
+			if uncacheableNegative(resp) {
+				if fallback == nil {
+					fallback, fallbackName = resp, name
+				}
+				continue
+			}
 			return resp, name, nil
 		}
 		if !notReady(name, err) {
@@ -215,6 +234,13 @@ func (r *Resolver) ResolveMultiple(ctx context.Context, domain string, queryType
 		failures = append(failures, upstreamFailure(name, resp, err))
 	}
 
+	if ctx.Err() == context.Canceled {
+		return nil, "", ctx.Err()
+	}
+	if fallback != nil {
+		logging.Debugf("using uncacheable NOERROR fallback for %s from %s; no complete answer", domain, fallbackName)
+		return fallback, fallbackName, nil
+	}
 	return nil, "", allUpstreamsFailed(domain, failures, allNotReady)
 }
 
@@ -224,6 +250,8 @@ func (r *Resolver) ResolveConcurrent(ctx context.Context, domain string, queryTy
 	if len(upstreamNames) == 0 {
 		return nil, "", fmt.Errorf("no upstreams specified")
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	respChan := make(chan struct {
 		msg  *dns.Msg
@@ -246,10 +274,26 @@ func (r *Resolver) ResolveConcurrent(ctx context.Context, domain string, queryTy
 	// Wait for first successful response
 	var failures []string
 	allNotReady := true
+	var fallback *dns.Msg
+	var fallbackName string
 	for i := 0; i < len(upstreamNames); i++ {
 		select {
 		case result := <-respChan:
-			if result.err == nil && usableResponse(result.msg) {
+			if err := ctx.Err(); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) && fallback != nil {
+					logging.Debugf("using uncacheable NOERROR fallback for %s from %s after deadline", domain, fallbackName)
+					return fallback, fallbackName, nil
+				}
+				return nil, "", err
+			}
+			if result.err == nil {
+				if uncacheableNegative(result.msg) {
+					if fallback == nil {
+						fallback, fallbackName = result.msg, result.name
+					}
+					continue
+				}
+				cancel()
 				return result.msg, result.name, nil
 			}
 			if !notReady(result.name, result.err) {
@@ -257,10 +301,21 @@ func (r *Resolver) ResolveConcurrent(ctx context.Context, domain string, queryTy
 			}
 			failures = append(failures, upstreamFailure(result.name, result.msg, result.err))
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) && fallback != nil {
+				logging.Debugf("using uncacheable NOERROR fallback for %s from %s after deadline", domain, fallbackName)
+				return fallback, fallbackName, nil
+			}
 			return nil, "", ctx.Err()
 		}
 	}
 
+	if ctx.Err() == context.Canceled {
+		return nil, "", ctx.Err()
+	}
+	if fallback != nil {
+		logging.Debugf("using uncacheable NOERROR fallback for %s from %s; no complete answer", domain, fallbackName)
+		return fallback, fallbackName, nil
+	}
 	return nil, "", allUpstreamsFailed(domain, failures, allNotReady)
 }
 
@@ -284,74 +339,108 @@ func (r *Resolver) query(ctx context.Context, domain string, queryType uint16, u
 	msg.RecursionDesired = true
 
 	timeout := time.Duration(upstream.Timeout) * time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
+	original := msg
+	var combined *dns.Msg
+	for {
+		resp, err := r.exchange(ctx, msg, upstream, timeout)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateReply(msg, resp); err != nil {
+			return nil, err
+		}
+		if resp.Truncated {
+			return nil, errors.New("DNS response is still truncated")
+		}
+		if combined == nil {
+			combined = resp
+		} else {
+			combined.Answer = append(combined.Answer, resp.Answer...)
+			combined.Ns = resp.Ns
+			combined.Extra = resp.Extra
+			combined.Rcode = resp.Rcode
+			// A locally assembled response is not a single authenticated reply.
+			combined.AuthenticatedData = false
+			combined.Authoritative = false
+		}
+		name, positive, err := responseTerminal(original.Question[0], combined)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateResponse(original, combined); err == nil {
+			if !positive {
+				for _, rr := range combined.Ns {
+					if soa, ok := rr.(*dns.SOA); ok && soa.Minttl < soa.Hdr.Ttl {
+						soa.Hdr.Ttl = soa.Minttl
+					}
+				}
+			}
+			return combined, nil
+		} else if resp.Rcode != dns.RcodeSuccess || strings.EqualFold(name, msg.Question[0].Name) {
+			if resp.Rcode == dns.RcodeSuccess && len(resp.Answer) == 0 && len(resp.Ns) == 0 &&
+				strings.EqualFold(name, msg.Question[0].Name) {
+				return combined, nil
+			}
+			return nil, err
+		}
+		msg = new(dns.Msg)
+		msg.SetQuestion(name, queryType)
+		msg.RecursionDesired = true
+	}
+}
+
+func (r *Resolver) exchange(ctx context.Context, msg *dns.Msg, upstream *config.UpstreamDNS, timeout time.Duration) (*dns.Msg, error) {
+	var resp *dns.Msg
+	var err error
 	switch upstream.Protocol {
-	case "udp", "UDP":
-		return r.queryUDP(ctx, msg, upstream.Address, timeout)
 	case "tcp", "TCP":
-		return r.queryTCP(ctx, msg, upstream.Address, timeout)
+		resp, err = exchangeDNS(ctx, msg, withDefaultPort(upstream.Address, "53"), "tcp", timeout)
 	case "dot", "DOT":
-		return r.queryDoT(ctx, msg, upstream.Address, timeout)
+		resp, err = exchangeDNS(ctx, msg, withDefaultPort(upstream.Address, "853"), "tcp-tls", timeout)
 	case "doh", "DOH":
-		return r.queryDoH(ctx, msg, upstream.Address, timeout)
+		resp, err = r.queryDoH(ctx, msg, upstream.Address)
 	default:
-		return r.queryUDP(ctx, msg, upstream.Address, timeout)
+		address := withDefaultPort(upstream.Address, "53")
+		resp, err = exchangeDNS(ctx, msg, address, "udp", timeout)
+		if err == nil && resp.Truncated {
+			if err = validateReply(msg, resp); err == nil {
+				resp, err = exchangeDNS(ctx, msg, address, "tcp", timeout)
+			}
+		}
 	}
-}
-
-// queryUDP performs DNS resolution over UDP
-func (r *Resolver) queryUDP(ctx context.Context, msg *dns.Msg, address string, timeout time.Duration) (*dns.Msg, error) {
-	address = withDefaultPort(address, "53")
-
-	client := &dns.Client{
-		Net:     "udp",
-		Timeout: timeout,
-	}
-
-	resp, _, err := client.ExchangeContext(ctx, msg, address)
 	if err != nil {
-		return nil, fmt.Errorf("UDP query failed for %s: %w", address, err)
+		return nil, err
 	}
-
 	return resp, nil
 }
 
-// queryTCP performs DNS resolution over TCP
-func (r *Resolver) queryTCP(ctx context.Context, msg *dns.Msg, address string, timeout time.Duration) (*dns.Msg, error) {
-	address = withDefaultPort(address, "53")
-
-	client := &dns.Client{
-		Net:     "tcp",
-		Timeout: timeout,
-	}
-
-	resp, _, err := client.ExchangeContext(ctx, msg, address)
+func exchangeDNS(ctx context.Context, msg *dns.Msg, address, network string, timeout time.Duration) (*dns.Msg, error) {
+	client := &dns.Client{Net: network, Timeout: timeout}
+	conn, err := client.DialContext(ctx, address)
 	if err != nil {
-		return nil, fmt.Errorf("TCP query failed for %s: %w", address, err)
+		return nil, fmt.Errorf("%s dial failed for %s: %w", network, address, err)
 	}
-
-	return resp, nil
-}
-
-// queryDoT performs DNS resolution over TLS (DoT)
-func (r *Resolver) queryDoT(ctx context.Context, msg *dns.Msg, address string, timeout time.Duration) (*dns.Msg, error) {
-	address = withDefaultPort(address, "853")
-
-	client := &dns.Client{
-		Net:     "tcp-tls",
-		Timeout: timeout,
+	defer conn.Close()
+	// This DNS library applies context deadlines but does not interrupt an
+	// established connection on cancellation.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	resp, _, err := client.ExchangeWithConnContext(ctx, msg, conn)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
-
-	resp, _, err := client.ExchangeContext(ctx, msg, address)
 	if err != nil {
-		return nil, fmt.Errorf("DoT query failed for %s: %w", address, err)
+		return nil, fmt.Errorf("%s query failed for %s: %w", network, address, err)
 	}
 
 	return resp, nil
 }
 
 // queryDoH performs DNS resolution over HTTPS (DoH)
-func (r *Resolver) queryDoH(ctx context.Context, msg *dns.Msg, address string, timeout time.Duration) (*dns.Msg, error) {
+func (r *Resolver) queryDoH(ctx context.Context, msg *dns.Msg, address string) (*dns.Msg, error) {
 	endpoint, err := url.Parse(address)
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" {
 		return nil, fmt.Errorf("invalid DoH URL %q", address)
@@ -362,13 +451,7 @@ func (r *Resolver) queryDoH(ctx context.Context, msg *dns.Msg, address string, t
 		return nil, fmt.Errorf("pack DoH query for %s: %w", address, err)
 	}
 
-	requestContext := ctx
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		requestContext, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, endpoint.String(), bytes.NewReader(wire))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(wire))
 	if err != nil {
 		return nil, fmt.Errorf("create DoH request for %s: %w", address, err)
 	}
@@ -409,8 +492,92 @@ func withDefaultPort(address, port string) string {
 	return net.JoinHostPort(address, port)
 }
 
-func usableResponse(response *dns.Msg) bool {
-	return response != nil && response.Rcode != dns.RcodeServerFailure && response.Rcode != dns.RcodeRefused
+func validateReply(query, response *dns.Msg) error {
+	if response == nil {
+		return errors.New("no DNS response")
+	}
+	if !response.Response || response.Id != query.Id || response.Opcode != query.Opcode {
+		return errors.New("DNS response header does not match query")
+	}
+	if response.Rcode != dns.RcodeSuccess && response.Rcode != dns.RcodeNameError {
+		return fmt.Errorf("DNS response code %s (%d) is not a final answer (question count: %d)",
+			dns.RcodeToString[response.Rcode], response.Rcode, len(response.Question))
+	}
+	if len(response.Question) != 1 {
+		return errors.New("DNS response must contain the original question")
+	}
+	want, got := query.Question[0], response.Question[0]
+	if !strings.EqualFold(want.Name, got.Name) || want.Qtype != got.Qtype || want.Qclass != got.Qclass {
+		return errors.New("DNS response question does not match query")
+	}
+	return nil
+}
+
+func validateResponse(query, response *dns.Msg) error {
+	if err := validateReply(query, response); err != nil {
+		return err
+	}
+	if response.Truncated {
+		return errors.New("DNS response is still truncated")
+	}
+	name, positive, err := responseTerminal(query.Question[0], response)
+	if err != nil {
+		return err
+	}
+	if positive {
+		if response.Rcode == dns.RcodeNameError {
+			return errors.New("NXDOMAIN response contains a positive answer")
+		}
+		return nil
+	}
+	for _, rr := range response.Ns {
+		if soa, ok := rr.(*dns.SOA); ok && soa.Hdr.Class == query.Question[0].Qclass &&
+			dns.IsSubDomain(strings.ToLower(soa.Hdr.Name), strings.ToLower(name)) {
+			return nil
+		}
+	}
+	return errors.New("DNS response has no terminal answer or enclosing SOA for a negative answer")
+}
+
+// Accepted only after an explicitly queried terminal returned NOERROR with
+// empty answer and authority sections; never sufficient for negative caching.
+func uncacheableNegative(response *dns.Msg) bool {
+	if response == nil || response.Rcode != dns.RcodeSuccess || len(response.Question) != 1 || len(response.Ns) != 0 {
+		return false
+	}
+	_, positive, err := responseTerminal(response.Question[0], response)
+	return err == nil && !positive
+}
+
+func responseTerminal(question dns.Question, response *dns.Msg) (string, bool, error) {
+	name := strings.ToLower(question.Name)
+	seen := make(map[string]bool)
+	for {
+		if seen[name] {
+			return "", false, errors.New("DNS response contains a CNAME loop")
+		}
+		if len(seen) > maxCNAMEHops {
+			return "", false, fmt.Errorf("DNS response exceeds %d CNAME hops", maxCNAMEHops)
+		}
+		seen[name] = true
+		target := ""
+		for _, rr := range response.Answer {
+			h := rr.Header()
+			if !strings.EqualFold(h.Name, name) || h.Class != question.Qclass {
+				continue
+			}
+			if h.Rrtype == question.Qtype || question.Qtype == dns.TypeANY {
+				return name, true, nil
+			}
+			if cname, ok := rr.(*dns.CNAME); ok {
+				target = strings.ToLower(cname.Target)
+			}
+		}
+		if target == "" {
+			return name, false, nil
+		}
+		name = target
+	}
 }
 
 // ExtractIPs extracts IPv4 and IPv6 addresses from DNS response
@@ -443,6 +610,14 @@ func GetMinTTL(msg *dns.Msg) uint32 {
 		}
 	}
 	if found {
+		if len(msg.Question) == 1 {
+			_, positive, err := responseTerminal(msg.Question[0], msg)
+			if err == nil && (!positive || msg.Rcode == dns.RcodeNameError) {
+				if negativeTTL := NegativeTTL(msg); negativeTTL < minTTL {
+					minTTL = negativeTTL
+				}
+			}
+		}
 		return minTTL
 	}
 	return NegativeTTL(msg)

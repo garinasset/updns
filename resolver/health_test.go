@@ -49,8 +49,11 @@ func TestUnreachableUpstreamIsPausedThenProbed(t *testing.T) {
 		t.Fatal("probe expected")
 	}
 	r.record(context.Background(), "up", nil)
-	if !r.allow("up") || !r.allow("up") {
+	if !r.allow("up") {
 		t.Fatal("successful probe must clear the pause")
+	}
+	if !r.allow("up") {
+		t.Fatal("successful probe must allow subsequent queries")
 	}
 }
 

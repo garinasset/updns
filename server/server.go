@@ -35,6 +35,9 @@ type Server struct {
 	controlListener   net.Listener
 	controlSocketPath string
 	stopChan          chan struct{}
+	ctx               context.Context
+	cancel            context.CancelFunc
+	preloadWG         sync.WaitGroup
 	nftRefreshNow     chan struct{}
 	logQuery          bool
 	started           bool
@@ -88,6 +91,7 @@ const cacheStatusPath = "/tmp/updns_cache_size"
 const upstreamNFTRefreshInterval = 5 * time.Minute
 const upstreamNFTRetryInterval = 30 * time.Second
 const localResolverWatchInterval = 5 * time.Second
+const preloadConcurrency = 8
 
 type nftSetManager interface {
 	AddIPsToSet([]string, string) error
@@ -118,9 +122,12 @@ type QueryResult struct {
 
 // NewServer creates a new DNS server
 func NewServer(cfg *config.Config) (*Server, error) {
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
 		cfg:           cfg,
 		stopChan:      make(chan struct{}),
+		ctx:           ctx,
+		cancel:        cancel,
 		nftRefreshNow: make(chan struct{}, 1),
 		logQuery:      cfg.LogQuery,
 		ptrFailures:   newFailureCache(ptrFailureTTL),
@@ -207,7 +214,11 @@ func (s *Server) Start() error {
 	go s.serveControl()
 
 	if s.cfg.ActivePreload && s.cache != nil {
-		go s.preloadLoop()
+		s.preloadWG.Add(1)
+		go func() {
+			defer s.preloadWG.Done()
+			s.preloadLoop()
+		}()
 	}
 	if s.cfg.UseLocalResolv {
 		go s.watchLocalResolversLoop(localResolverWatchInterval)
@@ -402,6 +413,7 @@ func upstreamEndpointHost(upstream config.UpstreamDNS) (string, error) {
 // Stop stops the DNS server
 func (s *Server) Stop() error {
 	close(s.stopChan)
+	s.cancel()
 
 	if s.controlListener != nil {
 		s.controlListener.Close()
@@ -412,6 +424,7 @@ func (s *Server) Stop() error {
 	if s.tcpServer != nil {
 		s.tcpServer.Shutdown()
 	}
+	s.preloadWG.Wait()
 	if s.cache != nil {
 		s.cache.Stop()
 	}
@@ -499,26 +512,51 @@ func (s *Server) preloadCacheEntries() {
 	if s.cache == nil {
 		return
 	}
-	for _, entry := range s.cache.GetEntriesNeedingPreload() {
-		result := s.resolveQuery(entry.Query, entry.QueryType)
-		if result == nil || result.TTL == 0 {
-			continue
+	entries := s.cache.GetEntriesNeedingPreload()
+	jobs := make(chan *cache.CacheEntry)
+	var workers sync.WaitGroup
+	for i := 0; i < preloadConcurrency && i < len(entries); i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for entry := range jobs {
+				if s.ctx.Err() != nil {
+					return
+				}
+				if !entry.NeedPreload() {
+					continue
+				}
+				result := s.resolveQuery(entry.Query, entry.QueryType)
+				if result == nil || result.TTL == 0 || s.ctx.Err() != nil {
+					continue
+				}
+				refreshedAt := time.Now()
+				s.cache.Refresh(fmt.Sprintf("%s:%d", entry.Query, entry.QueryType), entry, &cache.CacheEntry{
+					Query:      entry.Query,
+					QueryType:  entry.QueryType,
+					Answers:    result.Records,
+					Authority:  result.Authority,
+					Upstream:   result.UsedUpstream,
+					Rcode:      result.Rcode,
+					TTL:        result.TTL,
+					ExpireTime: refreshedAt.Add(time.Duration(result.TTL) * time.Second),
+					CreatedAt:  refreshedAt,
+				})
+			}
+		}()
+	}
+dispatch:
+	for _, entry := range entries {
+		select {
+		case jobs <- entry:
+		case <-s.ctx.Done():
+			break dispatch
 		}
-		refreshedAt := time.Now()
-		s.cache.Set(fmt.Sprintf("%s:%d", entry.Query, entry.QueryType), &cache.CacheEntry{
-			Query:      entry.Query,
-			QueryType:  entry.QueryType,
-			Answers:    result.Records,
-			Authority:  result.Authority,
-			Upstream:   result.UsedUpstream,
-			Rcode:      result.Rcode,
-			TTL:        result.TTL,
-			ExpireTime: refreshedAt.Add(time.Duration(result.TTL) * time.Second),
-			CreatedAt:  refreshedAt,
-		})
-		if s.started {
-			s.publishCacheSize()
-		}
+	}
+	close(jobs)
+	workers.Wait()
+	if s.started && s.ctx.Err() == nil && len(entries) > 0 {
+		s.publishCacheSize()
 	}
 }
 
@@ -778,7 +816,7 @@ func (s *Server) resolveQueryDetail(domain string, queryType uint16, client stri
 	}
 
 	// Other types have no overall deadline: each upstream uses its own timeout.
-	ctx := context.Background()
+	ctx := s.ctx
 	if svcb {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, svcbQueryTimeout)
@@ -855,11 +893,7 @@ func (s *Server) resolveQueryDetail(domain string, queryType uint16, client stri
 		}
 	}
 	result.Authority = append(result.Authority, resp.Ns...)
-	if resp.Rcode == dns.RcodeNameError || len(resp.Answer) == 0 {
-		result.TTL = resolver.NegativeTTL(resp)
-	} else {
-		result.TTL = resolver.GetMinTTL(resp)
-	}
+	result.TTL = resolver.GetMinTTL(resp)
 
 	// Add to nftsets if needed
 	if len(result.IPv4NFTSets) > 0 && len(ipv4s) > 0 {

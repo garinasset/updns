@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -507,6 +508,7 @@ func TestPreloadRefreshesNearExpiryCacheEntry(t *testing.T) {
 		TTL:        8,
 		CreatedAt:  now.Add(-6 * time.Second),
 		ExpireTime: now.Add(time.Second),
+		HitCount:   9,
 	})
 
 	srv.preloadCacheEntries()
@@ -521,6 +523,84 @@ func TestPreloadRefreshesNearExpiryCacheEntry(t *testing.T) {
 	}
 	if !entry.CreatedAt.After(now) {
 		t.Fatalf("expected refresh timestamp after %v, got %v", now, entry.CreatedAt)
+	}
+	if entry.HitCount != 10 {
+		t.Fatalf("refresh lost hit count: got %d, want 10 including Get", entry.HitCount)
+	}
+}
+
+func TestPreloadUsesBoundedConcurrentWorkers(t *testing.T) {
+	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{}, 2*preloadConcurrency)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	upstream := &dns.Server{
+		PacketConn: packetConn,
+		Handler: dns.HandlerFunc(func(w dns.ResponseWriter, request *dns.Msg) {
+			started <- struct{}{}
+			<-release
+			response := new(dns.Msg)
+			response.SetReply(request)
+			response.Answer = []dns.RR{&dns.A{
+				Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 120},
+				A:   net.IPv4(192, 0, 2, 1),
+			}}
+			if err := w.WriteMsg(response); err != nil {
+				t.Errorf("write upstream response: %v", err)
+			}
+		}),
+	}
+	go func() { _ = upstream.ActivateAndServe() }()
+	defer func() { unblock(); _ = upstream.Shutdown() }()
+	cfg := config.DefaultConfig()
+	cfg.UseLocalResolv = false
+	cfg.UpstreamDNS = []config.UpstreamDNS{{Name: "test", Protocol: "udp", Address: packetConn.LocalAddr().String(), Timeout: 5}}
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+	if err := srv.RegisterUpstream(&cfg.UpstreamDNS[0]); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for i := 0; i < 2*preloadConcurrency; i++ {
+		name := fmt.Sprintf("preload%d.example.", i)
+		srv.cache.Set(name+":1", &cache.CacheEntry{
+			Query: name, QueryType: dns.TypeA, TTL: 120,
+			CreatedAt: now.Add(-100 * time.Second), ExpireTime: now.Add(20 * time.Second), HitCount: 5,
+		})
+	}
+	done := make(chan struct{})
+	go func() { srv.preloadCacheEntries(); close(done) }()
+	defer func() { unblock(); <-done }()
+	for i := 0; i < preloadConcurrency; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("only %d refreshes started concurrently", i)
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("preload exceeded its concurrency bound")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unblock()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("preload batch did not finish")
+	}
+	for _, entry := range srv.cache.GetAllEntries() {
+		if entry.CreatedAt.Before(now) || entry.HitCount != 5 || len(entry.Answers) != 1 {
+			t.Fatalf("entry not refreshed correctly: %#v", entry)
+		}
 	}
 }
 
@@ -936,5 +1016,243 @@ func TestFailureReason(t *testing.T) {
 	}
 	if got := failureReason(errNoUpstream); got != "No upstream configured" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestStopCancelsActivePreload(t *testing.T) {
+	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{}, preloadConcurrency)
+	upstream := &dns.Server{
+		PacketConn: packetConn,
+		Handler: dns.HandlerFunc(func(dns.ResponseWriter, *dns.Msg) {
+			started <- struct{}{}
+		}),
+	}
+	go func() { _ = upstream.ActivateAndServe() }()
+	defer upstream.Shutdown()
+	cfg := config.DefaultConfig()
+	cfg.UseLocalResolv = false
+	cfg.UpstreamDNS = []config.UpstreamDNS{{Name: "silent", Protocol: "udp", Address: packetConn.LocalAddr().String(), Timeout: 10}}
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.RegisterUpstream(&cfg.UpstreamDNS[0]); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	srv.cache.Set("www.example.:1", &cache.CacheEntry{
+		Query: "www.example.", QueryType: dns.TypeA, TTL: 120,
+		CreatedAt: now.Add(-100 * time.Second), ExpireTime: now.Add(20 * time.Second),
+	})
+	srv.preloadWG.Add(1)
+	go func() { defer srv.preloadWG.Done(); srv.preloadLoop() }()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		srv.Stop()
+		t.Fatal("preload did not start")
+	}
+	done := make(chan struct{})
+	go func() { srv.Stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not cancel and join active preload")
+	}
+}
+
+func TestConcurrentQueryOnlyProcessesWinningResponse(t *testing.T) {
+	badReturned := make(chan struct{})
+	start := func(bad bool) (*dns.Server, string) {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		upstream := &dns.Server{
+			PacketConn: pc,
+			Handler: dns.HandlerFunc(func(w dns.ResponseWriter, request *dns.Msg) {
+				response := new(dns.Msg)
+				response.SetReply(request)
+				ip := net.IPv4(192, 0, 2, 1)
+				if bad {
+					response.Rcode = dns.RcodeFormatError
+					ip = net.IPv4(192, 0, 2, 99)
+				} else {
+					<-badReturned
+				}
+				response.Answer = []dns.RR{&dns.A{
+					Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+					A:   ip,
+				}}
+				if err := w.WriteMsg(response); err != nil {
+					t.Errorf("write upstream response: %v", err)
+				}
+				if bad {
+					close(badReturned)
+				}
+			}),
+		}
+		go func() { _ = upstream.ActivateAndServe() }()
+		return upstream, pc.LocalAddr().String()
+	}
+	bad, badAddress := start(true)
+	defer bad.Shutdown()
+	good, goodAddress := start(false)
+	defer good.Shutdown()
+	cfg := config.DefaultConfig()
+	cfg.UseLocalResolv = false
+	cfg.ConcurrentQuery = true
+	cfg.Rules = []config.Rule{{
+		ID: "fallback", IgnoreDomainMatch: true, Action: "ipv4+ipv6",
+		Upstreams: []string{"bad", "good"}, IPv4NFTSets: []string{"inet/fw4/test"},
+	}}
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+	manager := &recordingNFTSetManager{added: make(map[string][]string), contents: make(map[string][]string)}
+	srv.nftMgr = manager
+	for _, upstream := range []*config.UpstreamDNS{
+		{Name: "bad", Protocol: "udp", Address: badAddress, Timeout: 1},
+		{Name: "good", Protocol: "udp", Address: goodAddress, Timeout: 1},
+	} {
+		if err := srv.RegisterUpstream(upstream); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for pass := 0; pass < 2; pass++ {
+		result, err := srv.Query("www.example.", dns.TypeA)
+		if err != nil || result == nil || result.UsedUpstream != "good" || result.CacheHit != (pass == 1) {
+			t.Fatalf("pass %d: result=%#v, error=%v", pass, result, err)
+		}
+	}
+	if got := manager.added["inet/fw4/test"]; len(got) != 1 || got[0] != "192.0.2.1" {
+		t.Fatalf("non-winning response entered nftables processing: %v", got)
+	}
+	if entries := srv.cache.GetAllEntries(); len(entries) != 1 || entries[0].Upstream != "good" {
+		t.Fatalf("non-winning response entered cache: %#v", entries)
+	}
+}
+
+func TestCNAMECompletionCachesTerminalNegativeResult(t *testing.T) {
+	for _, code := range []int{dns.RcodeSuccess, dns.RcodeNameError} {
+		t.Run(dns.RcodeToString[code], func(t *testing.T) {
+			pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls atomic.Int32
+			upstream := &dns.Server{
+				PacketConn: pc,
+				Handler: dns.HandlerFunc(func(w dns.ResponseWriter, query *dns.Msg) {
+					calls.Add(1)
+					response := new(dns.Msg)
+					response.SetReply(query)
+					if query.Question[0].Name == "alias.example." {
+						response.Answer = []dns.RR{&dns.CNAME{
+							Hdr:    dns.RR_Header{Name: "alias.example.", Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 300},
+							Target: "terminal.example.",
+						}}
+					} else {
+						response.Rcode = code
+						response.Ns = []dns.RR{&dns.SOA{
+							Hdr: dns.RR_Header{Name: "example.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 120},
+							Ns:  "ns.example.", Mbox: "hostmaster.example.", Minttl: 20,
+						}}
+					}
+					if err := w.WriteMsg(response); err != nil {
+						t.Errorf("write upstream response: %v", err)
+					}
+				}),
+			}
+			go func() { _ = upstream.ActivateAndServe() }()
+			defer upstream.Shutdown()
+			cfg := config.DefaultConfig()
+			cfg.UseLocalResolv = false
+			cfg.ConcurrentQuery = true
+			cfg.UpstreamDNS = []config.UpstreamDNS{{Name: "test", Protocol: "udp", Address: pc.LocalAddr().String(), Timeout: 1}}
+			srv, err := NewServer(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer srv.Stop()
+			if err := srv.RegisterUpstream(&cfg.UpstreamDNS[0]); err != nil {
+				t.Fatal(err)
+			}
+			for pass := 0; pass < 2; pass++ {
+				result, err := srv.Query("alias.example.", dns.TypeAAAA)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.CacheHit != (pass == 1) || result.Rcode != code || result.TTL != 20 ||
+					len(result.Records) != 1 || len(result.Authority) != 1 {
+					t.Fatalf("pass %d: incorrect combined negative result: %#v", pass, result)
+				}
+				if got := result.Authority[0].Header().Ttl; got != 20 {
+					t.Fatalf("pass %d: CNAME terminal SOA TTL=%d, want 20", pass, got)
+				}
+			}
+
+			if got := calls.Load(); got != 2 {
+				t.Fatalf("want initial plus terminal query only, got %d calls", got)
+			}
+		})
+	}
+}
+
+func TestCNAMEFallbackIsReturnedButNotCached(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	upstream := &dns.Server{
+		PacketConn: pc,
+		Handler: dns.HandlerFunc(func(w dns.ResponseWriter, query *dns.Msg) {
+			calls.Add(1)
+			response := new(dns.Msg)
+			response.SetReply(query)
+			if query.Question[0].Name == "alias.example." {
+				response.Answer = []dns.RR{&dns.CNAME{
+					Hdr:    dns.RR_Header{Name: "alias.example.", Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 300},
+					Target: "terminal.example.",
+				}}
+			}
+			if err := w.WriteMsg(response); err != nil {
+				t.Errorf("write upstream response: %v", err)
+			}
+		}),
+	}
+	go func() { _ = upstream.ActivateAndServe() }()
+	defer upstream.Shutdown()
+	cfg := config.DefaultConfig()
+	cfg.UseLocalResolv = false
+	cfg.ConcurrentQuery = true
+	cfg.UpstreamDNS = []config.UpstreamDNS{{Name: "test", Protocol: "udp", Address: pc.LocalAddr().String(), Timeout: 1}}
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+	if err := srv.RegisterUpstream(&cfg.UpstreamDNS[0]); err != nil {
+		t.Fatal(err)
+	}
+	for pass := 0; pass < 2; pass++ {
+		result, err := srv.Query("alias.example.", dns.TypeAAAA)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.CacheHit || result.Rcode != dns.RcodeSuccess || result.TTL != 0 ||
+			len(result.Records) != 1 || len(result.Authority) != 0 {
+			t.Fatalf("incorrect uncacheable CNAME fallback: %#v", result)
+		}
+	}
+	if got := calls.Load(); got != 4 || srv.cache.Size() != 0 {
+		t.Fatalf("fallback was cached: upstream calls=%d cache size=%d", got, srv.cache.Size())
 	}
 }

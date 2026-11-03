@@ -49,7 +49,10 @@ func NewCache(maxSize int) *Cache {
 func (c *Cache) Set(key string, entry *CacheEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.setLocked(key, entry)
+}
 
+func (c *Cache) setLocked(key string, entry *CacheEntry) {
 	if entry == nil || entry.TTL == 0 || !entry.ExpireTime.After(time.Now()) {
 		delete(c.entries, key)
 		return
@@ -67,6 +70,24 @@ func (c *Cache) Set(key string, entry *CacheEntry) {
 		copyEntry.CreatedAt = time.Now()
 	}
 	c.entries[key] = &copyEntry
+}
+
+// Refresh replaces the scanned entry without losing hits received during I/O.
+// Entries removed or replaced since the scan are left untouched.
+func (c *Cache) Refresh(key string, previous, replacement *CacheEntry) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	current := c.entries[key]
+	if previous == nil || replacement == nil || replacement.TTL == 0 ||
+		!replacement.ExpireTime.After(time.Now()) || current == nil ||
+		!current.CreatedAt.Equal(previous.CreatedAt) || !current.ExpireTime.Equal(previous.ExpireTime) {
+		return false
+	}
+	updated := *replacement
+	updated.HitCount = current.HitCount
+	c.setLocked(key, &updated)
+	return true
 }
 
 // Get retrieves a cache entry if not expired
