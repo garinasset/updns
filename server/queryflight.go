@@ -14,14 +14,15 @@ type queryFlight struct {
 	done    chan struct{}
 	cancel  context.CancelFunc
 	preload bool
+	route   string
 	result  *QueryResult
 	err     error
 }
 
 // queryMu protects registration and commit; network I/O never holds it.
-func (s *Server) startQueryLocked(key, domain string, queryType uint16, client string, previous *cache.CacheEntry, epoch uint64, preload bool) *queryFlight {
+func (s *Server) startQueryLocked(key, domain string, queryType uint16, client, route string, previous *cache.CacheEntry, epoch uint64, preload bool) *queryFlight {
 	ctx, cancel := context.WithCancel(s.ctx)
-	flight := &queryFlight{done: make(chan struct{}), cancel: cancel, preload: preload}
+	flight := &queryFlight{done: make(chan struct{}), cancel: cancel, preload: preload, route: route}
 	if s.flights == nil {
 		s.flights = make(map[string]*queryFlight)
 	}
@@ -49,7 +50,7 @@ func (s *Server) startQueryLocked(key, domain string, queryType uint16, client s
 					now := time.Now()
 					replacement = &cache.CacheEntry{
 						Query: domain, QueryType: queryType, Answers: result.Records, Authority: result.Authority,
-						Upstream: result.UsedUpstream, Rcode: result.Rcode, TTL: result.TTL,
+						Upstream: result.UsedUpstream, Rcode: result.Rcode, TTL: result.TTL, Route: result.route,
 						CreatedAt: now, ExpireTime: now.Add(time.Duration(result.TTL) * time.Second),
 					}
 				}

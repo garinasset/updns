@@ -64,7 +64,14 @@ Rules are evaluated in order and evaluation stops at the first applicable match.
 
 Responses of `nxdomain` and `zeroip` are cached with a fixed TTL of 60 seconds and are not written to nftables sets.
 
-The `ipv4+ipv6`, `ipv4only`, and `ipv6only` actions filter only A/AAAA records; MX, TXT, NS, SOA, SRV, PTR, and other non-address records, as well as CNAMEs, are returned verbatim. HTTPS/SVCB records are not returned because their address hints would bypass address-family filtering and nftables sets.
+The `ipv4+ipv6`, `ipv4only`, and `ipv6only` actions filter only A/AAAA records; MX, TXT, NS, SOA, SRV, PTR, and other non-address records, as well as CNAMEs, are returned verbatim. HTTPS/SVCB records are returned, with parameters such as `alpn` and `ech` preserved.
+
+HTTPS/SVCB handling:
+
+- **Address hints:** `ipv4hint`/`ipv6hint` are filtered by the rule action (for example, `ipv4only` removes `ipv6hint`), and the kept hint addresses are written to the rule's nftables sets just like A/AAAA records.
+- **Target binding:** The target name (TargetName, or the query name itself when ServiceMode uses `.`) is bound to the rule that produced the response. When a client then queries the target name, UpDNS uses that rule's upstreams and action, and writes the addresses to the sets of every bound rule as well as the target's own matched rule, keeping nftables routing consistent. When several rules bind the same target, upstreams and action come from the first bound rule.
+- **Binding lifetime:** Bindings expire with the record TTL, at least 30 seconds. Capacity equals `cache_size`; when full, new HTTPS/SVCB records are dropped and active bindings are never evicted. After binding, target addresses are prefetched asynchronously; no synchronous follow-up query is made.
+- **Limits:** If the target name itself matches an `nxdomain`/`zeroip` rule, or the chain (including CNAMEs) exceeds 16 hops, the HTTPS/SVCB record is dropped so blocking cannot be bypassed. Queries without a matching rule (default upstreams) create no binding. Error-RCODE responses are returned verbatim but create no binding, and their hints are not written to sets.
 
 A rule (except `nxdomain` and `zeroip`) can select one or more upstreams and specify separate nftables sets for IPv4/IPv6. With concurrent query enabled, the rule's selected upstreams are queried concurrently and the first valid DNS response wins; otherwise they are queried one by one in configured order until a valid response is obtained. If no rule matches and there is no fallback rule, the whole upstream DNS list (if any) is used; when the local resolver is enabled, its upstreams come before the other upstreams.
 

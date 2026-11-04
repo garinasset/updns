@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,11 +20,20 @@ import (
 )
 
 type recordingNFTSetManager struct {
+	mu       sync.Mutex
 	added    map[string][]string
 	contents map[string][]string
 }
 
+func (m *recordingNFTSetManager) has(setName, ip string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Contains(m.added[setName], ip)
+}
+
 func (m *recordingNFTSetManager) AddIPsToSet(ips []string, setName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.added[setName] = append(m.added[setName], ips...)
 	m.contents[setName] = append(m.contents[setName], ips...)
 	return nil
@@ -34,7 +44,9 @@ func (m *recordingNFTSetManager) FlushSet(string) error {
 }
 
 func (m *recordingNFTSetManager) GetSetContents(setName string) ([]string, error) {
-	return m.contents[setName], nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.contents[setName]...), nil
 }
 
 func TestResolveQueryPreservesAddressFamilyAndTTL(t *testing.T) {
@@ -157,8 +169,11 @@ func TestResolveQueryPassesThroughNonAddressRecords(t *testing.T) {
 	}
 
 	https := srv.resolveQuery("example.com.", dns.TypeHTTPS)
-	if https == nil || len(https.Records) != 0 {
-		t.Fatalf("HTTPS records with address hints must not bypass the rule action: %#v", https)
+	if https == nil || len(https.Records) != 1 {
+		t.Fatalf("HTTPS record was not returned: %#v", https)
+	}
+	if _, hint4, hint6 := filterServiceHints(https.Records[0], true, true); len(hint4) != 0 || len(hint6) != 0 {
+		t.Fatalf("IPv4-only rule kept a disallowed address hint: %v", https.Records[0])
 	}
 }
 

@@ -49,6 +49,8 @@ type Server struct {
 	svcbFailures      map[string]time.Time
 	ptrFailures       *failureCache
 	warnLimit         *warnLimiter
+	bindings          *serviceBindings
+	targetPrefetch    chan struct{}
 }
 
 // HTTPS/SVCB queries are optional hints that some upstreams silently drop.
@@ -123,6 +125,7 @@ type QueryResult struct {
 	TTL          uint32          `json:"ttl"`
 	// Error is a short, normalized failure reason; set only when the query failed.
 	Error string `json:"error,omitempty"`
+	route string
 }
 
 // NewServer creates a new DNS server
@@ -137,6 +140,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		logQuery:      cfg.LogQuery,
 		ptrFailures:   newFailureCache(ptrFailureTTL),
 		warnLimit:     newWarnLimiter(warnInterval),
+		bindings:      newServiceBindings(cfg.CacheSize),
+		// Bounds concurrent background lookups of newly bound service targets.
+		targetPrefetch: make(chan struct{}, serviceTargetPrefetch),
 	}
 
 	// Initialize components
@@ -456,16 +462,32 @@ func (s *Server) Query(domain string, queryType uint16) (*QueryResult, error) {
 // queryFrom is Query with the requesting client's address, used for logging.
 func (s *Server) queryFrom(domain string, queryType uint16, client string) (*QueryResult, error) {
 	domain = strings.ToLower(dns.Fqdn(domain))
+	result, err := s.queryRouted(domain, queryType, client)
+	// A binding created while this query was resolving changes its routing;
+	// resolve again so the returned addresses reach the current nftsets.
+	if err == nil && result != nil && s.bindings.size.Load() > 0 && result.route != s.routeFor(domain).signature {
+		result, err = s.resolveQueryDetailContext(s.ctx, domain, queryType, client)
+	}
+	if err == nil {
+		s.applyServiceBindings(result)
+	}
+	return result, err
+}
+
+func (s *Server) queryRouted(domain string, queryType uint16, client string) (*QueryResult, error) {
 	cacheKey := fmt.Sprintf("%s:%d", domain, queryType)
+	route := s.routeFor(domain)
 	s.queryMu.Lock()
 	if err := s.ctx.Err(); err != nil {
 		s.queryMu.Unlock()
 		return nil, err
 	}
 	if s.cache != nil {
-		if entry, found := s.cache.Get(cacheKey); found {
+		// An entry resolved under different routing (a service binding was
+		// added or expired) is a miss, so its addresses reach the current sets.
+		if entry, found := s.cache.Get(cacheKey); found && entry.Route == route.signature {
 			s.queryMu.Unlock()
-			result := s.queryMetadata(domain, queryType)
+			result := s.metadataFor(domain, queryType, route)
 			result.CacheHit = true
 			result.Records = entry.Answers
 			result.Authority = entry.Authority
@@ -485,6 +507,10 @@ func (s *Server) queryFrom(domain string, queryType uint16, client string) (*Que
 		}
 	}
 	flight := s.flights[cacheKey]
+	if flight != nil && flight.route != route.signature {
+		s.queryMu.Unlock()
+		return s.resolveQueryDetailContext(s.ctx, domain, queryType, client)
+	}
 	waited := flight != nil && flight.preload
 	if flight == nil {
 		var previous *cache.CacheEntry
@@ -493,7 +519,7 @@ func (s *Server) queryFrom(domain string, queryType uint16, client string) (*Que
 			previous, epoch = s.cache.Snapshot(cacheKey)
 			s.cache.Suspend(cacheKey)
 		}
-		flight = s.startQueryLocked(cacheKey, domain, queryType, client, previous, epoch, false)
+		flight = s.startQueryLocked(cacheKey, domain, queryType, client, route.signature, previous, epoch, false)
 	}
 	s.queryMu.Unlock()
 	select {
@@ -539,24 +565,29 @@ func (s *Server) preloadCacheEntries() {
 	for _, entry := range entries {
 		key := fmt.Sprintf("%s:%d", entry.Query, entry.QueryType)
 		if s.flights[key] == nil {
-			s.startQueryLocked(key, entry.Query, entry.QueryType, "", entry, epoch, true)
+			s.startQueryLocked(key, entry.Query, entry.QueryType, "", s.routeFor(entry.Query).signature, entry, epoch, true)
 		}
 	}
 }
 
 func (s *Server) queryMetadata(domain string, queryType uint16) *QueryResult {
+	return s.metadataFor(domain, queryType, s.routeFor(domain))
+}
+
+func (s *Server) metadataFor(domain string, queryType uint16, route queryRoute) *QueryResult {
 	result := &QueryResult{
 		Domain:     domain,
 		QueryType:  dns.TypeToString[queryType],
 		Action:     "ipv4+ipv6",
 		IPv4InSets: make(map[string]bool),
 		IPv6InSets: make(map[string]bool),
+		route:      route.signature,
 	}
-	if rule := s.findMatchingRule(domain); rule != nil {
+	if rule := route.rule; rule != nil {
 		result.MatchedRule = rule.ID
 		result.Action = rule.Action
-		result.IPv4NFTSets = rule.IPv4NFTSets
-		result.IPv6NFTSets = rule.IPv6NFTSets
+		result.IPv4NFTSets = route.ipv4Sets
+		result.IPv6NFTSets = route.ipv6Sets
 	}
 	return result
 }
@@ -755,22 +786,12 @@ func (s *Server) resolveQueryDetail(domain string, queryType uint16, client stri
 }
 
 func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, queryType uint16, client string) (*QueryResult, error) {
-	result := &QueryResult{
-		Domain:     domain,
-		QueryType:  dns.TypeToString[queryType],
-		Action:     "ipv4+ipv6",
-		Rcode:      dns.RcodeSuccess,
-		IPv4InSets: make(map[string]bool),
-		IPv6InSets: make(map[string]bool),
-	}
+	route := s.routeFor(domain)
+	result := s.metadataFor(domain, queryType, route)
+	result.Rcode = dns.RcodeSuccess
 
-	// Find matching rule
-	matchedRule := s.findMatchingRule(domain)
+	matchedRule := route.rule
 	if matchedRule != nil {
-		result.MatchedRule = matchedRule.ID
-		result.Action = matchedRule.Action
-		result.IPv4NFTSets = matchedRule.IPv4NFTSets
-		result.IPv6NFTSets = matchedRule.IPv6NFTSets
 		switch normalizeAction(result.Action) {
 		case "nxdomain":
 			result.Rcode = dns.RcodeNameError
@@ -878,7 +899,10 @@ func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, q
 				result.Answers = append(result.Answers, record.AAAA.String())
 			}
 		case *dns.HTTPS, *dns.SVCB:
-			// Address hints would bypass the rule's action filter and nftsets.
+			filtered, hint4, hint6 := filterServiceHints(rr, allowIPv4, allowIPv6)
+			result.Records = append(result.Records, filtered)
+			ipv4s = append(ipv4s, hint4...)
+			ipv6s = append(ipv6s, hint6...)
 		default:
 			result.Records = append(result.Records, dns.Copy(rr))
 		}
@@ -957,6 +981,10 @@ func (s *Server) populateNFTMembership(result *QueryResult) {
 			ipv4s = append(ipv4s, record.A.String())
 		case *dns.AAAA:
 			ipv6s = append(ipv6s, record.AAAA.String())
+		case *dns.HTTPS, *dns.SVCB:
+			_, hint4, hint6 := filterServiceHints(rr, true, true)
+			ipv4s = append(ipv4s, hint4...)
+			ipv6s = append(ipv6s, hint6...)
 		}
 	}
 	for _, setName := range result.IPv4NFTSets {
@@ -1084,7 +1112,7 @@ func (s *Server) GetCacheSize() int {
 }
 
 func (s *Server) publishCacheSize() {
-	if err := os.WriteFile(cacheStatusPath, []byte(fmt.Sprintf("%d\n", s.GetCacheSize())), 0644); err != nil {
+	if err := os.WriteFile(cacheStatusPath, fmt.Appendf(nil, "%d\n", s.GetCacheSize()), 0644); err != nil {
 		logging.Warnf("failed to publish cache size: %v", err)
 	}
 }

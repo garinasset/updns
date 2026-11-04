@@ -65,7 +65,14 @@ DoH 地址须为完整 HTTPS URL。IPv6 地址带端口时使用方括号，例�
 
 `nxdomain` 与 `zeroip` 响应的缓存 TTL 固定为 60 秒，且不写入 nftables set。
 
-`ipv4+ipv6`、`ipv4only`、`ipv6only` 只过滤 A/AAAA 记录；MX、TXT、NS、SOA、SRV、PTR 等非地址记录及 CNAME 原样返回。HTTPS/SVCB 记录可能携带地址提示，会绕过地址族过滤和 nftables set，因此不返回。
+`ipv4+ipv6`、`ipv4only`、`ipv6only` 只过滤 A/AAAA 记录；MX、TXT、NS、SOA、SRV、PTR 等非地址记录及 CNAME 原样返回。HTTPS/SVCB 记录照常返回，`alpn`、`ech` 等参数保留。
+
+HTTPS/SVCB 处理规则：
+
+- **地址提示：** `ipv4hint`/`ipv6hint` 按规则动作过滤（如 `ipv4only` 移除 `ipv6hint`），保留的提示地址与 A/AAAA 一样写入规则的 nftables set。
+- **目标名绑定：** 响应中的目标主机名（TargetName，ServiceMode 为 `.` 时即查询名本身）绑定到产生该响应的规则。客户端随后查询目标名时，使用该规则的上游和动作，并将地址同时写入所有绑定规则及目标名自身匹配规则的 set，确保 nftables 路由链一致。多个规则绑定同一目标时，上游和动作取首个绑定规则。
+- **绑定生命周期：** 绑定按记录 TTL 过期，最短 30 秒；容量与 `cache_size` 相同，已满时丢弃新的 HTTPS/SVCB 记录，不淘汰有效绑定。绑定后异步预取目标名地址，不同步追加查询。
+- **限制：** 目标名自身命中 `nxdomain`/`zeroip` 规则，或链长（含 CNAME）超过 16 跳时，丢弃该 HTTPS/SVCB 记录，避免绕过拦截。未命中规则（使用默认上游）的查询不建立绑定；错误码响应原样返回，但不建立绑定，提示地址也不写入 set。
 
 规则（`nxdomain`、`zeroip` 除外）可选择一个或多个上游，并为 IPv4/IPv6 分别指定 nftables set。
 

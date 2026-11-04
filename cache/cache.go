@@ -21,7 +21,9 @@ type CacheEntry struct {
 	ExpireTime time.Time
 	CreatedAt  time.Time
 	HitCount   int
-	version    uint64
+	// Route identifies the rule routing the entry was resolved under.
+	Route   string
+	version uint64
 }
 
 type node struct {
