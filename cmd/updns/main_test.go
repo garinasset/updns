@@ -21,6 +21,16 @@ func TestQueryPathReportsMixedAddressFamilyResults(t *testing.T) {
 	}
 }
 
+func TestQueryPathReportsPrefetchWait(t *testing.T) {
+	results := []*server.QueryResult{
+		{QueryType: "A", PrefetchWait: true},
+		{QueryType: "AAAA", CacheHit: true},
+	}
+	if got := queryPath(results); got != "A=Prefetch Hit / AAAA=Cache Hit" {
+		t.Fatalf("incorrect wait path: %s", got)
+	}
+}
+
 func TestWriteQueryOutputFormatsAlignedFields(t *testing.T) {
 	results := []*server.QueryResult{
 		{

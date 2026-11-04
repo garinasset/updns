@@ -464,6 +464,8 @@ func queryPath(results []*server.QueryResult) string {
 		path := "Upstream Query"
 		if result.CacheHit {
 			path = "Cache Hit"
+		} else if result.PrefetchWait {
+			path = "Prefetch Hit"
 		} else if strings.EqualFold(result.Action, "nxdomain") {
 			path = "NXDOMAIN RULE"
 		} else if strings.EqualFold(result.Action, "zeroip") {

@@ -67,14 +67,8 @@ func DefaultConfig() *Config {
 		ActivePreload:   true,
 		LogQuery:        false,
 		LogLevel:        "info",
-		UpstreamDNS: []UpstreamDNS{
-			{Name: "google_doh", Address: "https://dns.google/dns-query", Protocol: "doh", Timeout: 5},
-			{Name: "cloudflare_doh", Address: "https://one.one.one.one/dns-query", Protocol: "doh", Timeout: 5},
-			{Name: "doh_pub", Address: "https://doh.pub/dns-query", Protocol: "doh", Timeout: 5},
-			{Name: "adguard_doh", Address: "https://unfiltered.adguard-dns.com/dns-query", Protocol: "doh", Timeout: 5},
-		},
-		DomainLists: []DomainList{},
-		Rules:       []Rule{},
+		DomainLists:     []DomainList{},
+		Rules:           []Rule{},
 	}
 }
 
@@ -91,10 +85,7 @@ func LoadFromUCI(configPath string) (*Config, error) {
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return loadLocalResolvers(cfg)
-		}
-		return nil, err
+		return nil, fmt.Errorf("read UCI config %s: %w", configPath, err)
 	}
 
 	sections, err := parseUCI(data)
@@ -199,10 +190,9 @@ func LoadFromUCI(configPath string) (*Config, error) {
 		}
 	}
 
-	if len(upstreams) > 0 {
-		for _, upstream := range upstreams {
-			cfg.UpstreamDNS = upsertUpstream(cfg.UpstreamDNS, upstream)
-		}
+	cfg.UpstreamDNS = nil
+	for _, upstream := range upstreams {
+		cfg.UpstreamDNS = upsertUpstream(cfg.UpstreamDNS, upstream)
 	}
 	if cfg.UseLocalResolv {
 		cfg, err = loadLocalResolvers(cfg)

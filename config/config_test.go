@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -36,6 +38,20 @@ func TestDefaultConfig(t *testing.T) {
 
 	if cfg.LogQuery {
 		t.Error("Expected LogQuery to be false by default")
+	}
+	if len(cfg.UpstreamDNS) != 0 {
+		t.Fatalf("configuration defaults must not include upstream DNS servers: %#v", cfg.UpstreamDNS)
+	}
+}
+
+func TestLoadMissingUCIReportsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-updns")
+	cfg, err := LoadFromUCI(path)
+	if !errors.Is(err, os.ErrNotExist) || cfg != nil {
+		t.Fatalf("expected missing configuration error without fallback, got config=%#v error=%v", cfg, err)
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Fatalf("configuration error must identify the missing path: %v", err)
 	}
 }
 
@@ -150,23 +166,88 @@ config rule 'blocked_rule'
 	if !containsUpstream(cfg.UpstreamDNS, "https://dns.example/dns-query") {
 		t.Fatal("configured upstream was not loaded")
 	}
-	for _, name := range []string{"google_doh", "cloudflare_doh", "doh_pub", "adguard_doh", "test_doh"} {
-		found := false
-		for _, upstream := range cfg.UpstreamDNS {
-			if upstream.Name == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("upstream %q was not loaded", name)
-		}
+	wantUpstreams := []UpstreamDNS{
+		{Name: "local-resolv-1", Address: "192.0.2.53", Protocol: "udp", Timeout: 5},
+		{Name: "test_doh", Address: "https://dns.example/dns-query", Protocol: "doh", Timeout: 3},
+	}
+	if !reflect.DeepEqual(cfg.UpstreamDNS, wantUpstreams) {
+		t.Fatalf("unexpected upstreams: got %#v, want %#v", cfg.UpstreamDNS, wantUpstreams)
 	}
 	if len(cfg.DomainLists) != 1 || cfg.DomainLists[0] != (DomainList{Name: "blocked", File: "blocked.txt"}) {
 		t.Fatalf("unexpected domain lists: %#v", cfg.DomainLists)
 	}
 	if len(cfg.Rules) != 1 || cfg.Rules[0].Action != "ipv4only" || cfg.Rules[0].Upstreams[0] != "test_doh" || cfg.Rules[0].DomainLists[0] != "blocked" {
 		t.Fatalf("unexpected rules: %#v", cfg.Rules)
+	}
+}
+
+func TestLoadUCIUsesOnlyConfiguredUpstreams(t *testing.T) {
+	tests := []struct {
+		name      string
+		upstreams []UpstreamDNS
+	}{
+		{name: "all upstreams deleted"},
+		{
+			name: "default endpoint renamed",
+			upstreams: []UpstreamDNS{
+				{Name: "My-Google", Address: "https://dns.google/dns-query", Protocol: "doh", Timeout: 3},
+			},
+		},
+		{
+			name: "default endpoint modified and order preserved",
+			upstreams: []UpstreamDNS{
+				{Name: "custom", Address: "192.0.2.53", Protocol: "udp", Timeout: 2},
+				{Name: "google_doh", Address: "https://dns.example/dns-query", Protocol: "doh", Timeout: 7},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.UseLocalResolv = false
+			cfg.UpstreamDNS = tt.upstreams
+			path := filepath.Join(t.TempDir(), "updns")
+			if err := SaveToUCI(cfg, path); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := LoadFromUCI(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(loaded.UpstreamDNS, tt.upstreams) {
+				t.Fatalf("got upstreams %#v, want %#v", loaded.UpstreamDNS, tt.upstreams)
+			}
+		})
+	}
+}
+
+func TestLoadPackagedUCIHasNoImplicitUpstreams(t *testing.T) {
+	for _, name := range []string{"updns", "updns-E"} {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("..", "openwrt", "updns", "root", "etc", "config", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "updns")
+			data = []byte(strings.Replace(string(data), "option use_local_resolv '1'", "option use_local_resolv '0'", 1))
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadFromUCI(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []UpstreamDNS{
+				{Name: "Tencent-UDP", Address: "119.29.29.29", Protocol: "udp", Timeout: 5},
+				{Name: "Google-DoH", Address: "https://dns.google/dns-query", Protocol: "doh", Timeout: 5},
+				{Name: "Cloudflare-DoH", Address: "https://one.one.one.one/dns-query", Protocol: "doh", Timeout: 5},
+				{Name: "Tencent-DoH", Address: "https://doh.pub/dns-query", Protocol: "doh", Timeout: 5},
+				{Name: "AdGuard-DoH", Address: "https://unfiltered.adguard-dns.com/dns-query", Protocol: "doh", Timeout: 5},
+			}
+			if !reflect.DeepEqual(cfg.UpstreamDNS, want) {
+				t.Fatalf("got upstreams %#v, want %#v", cfg.UpstreamDNS, want)
+			}
+		})
 	}
 }
 
@@ -211,6 +292,9 @@ func TestLoadLocalResolversAddsEveryNameserver(t *testing.T) {
 	cfg, err := LoadFromUCI(configFile)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(cfg.UpstreamDNS) != 2 {
+		t.Fatalf("expected only the two local resolvers, got %#v", cfg.UpstreamDNS)
 	}
 	for _, expected := range []struct {
 		name    string
@@ -319,6 +403,9 @@ option file 'second.txt'
 func TestSaveToUCIIncludesUpstreamName(t *testing.T) {
 	configFile := filepath.Join(t.TempDir(), "updns")
 	cfg := DefaultConfig()
+	cfg.UpstreamDNS = []UpstreamDNS{
+		{Name: "google_doh", Address: "https://dns.google/dns-query", Protocol: "doh", Timeout: 5},
+	}
 	if err := SaveToUCI(cfg, configFile); err != nil {
 		t.Fatal(err)
 	}

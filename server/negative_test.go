@@ -76,7 +76,7 @@ func TestNegativeSOATTLOnWireAndCache(t *testing.T) {
 	}
 }
 
-func TestUncacheableNegativePreloadRetainsLiveNXDOMAIN(t *testing.T) {
+func TestUncacheableNegativePreloadDeletesLiveNXDOMAIN(t *testing.T) {
 	var calls atomic.Int32
 	var fail atomic.Bool
 	srv := newNegativeTestServer(t, &calls, func(response *dns.Msg) {
@@ -94,18 +94,20 @@ func TestUncacheableNegativePreloadRetainsLiveNXDOMAIN(t *testing.T) {
 	srv.cache.Set("negative.example.:28", entry)
 	fail.Store(true)
 	srv.preloadCacheEntries()
-	result, err := srv.Query("negative.example.", dns.TypeAAAA)
-	if err != nil || result == nil || !result.CacheHit || result.Rcode != dns.RcodeNameError {
-		t.Fatalf("failed refresh invalidated cached NXDOMAIN: result=%#v error=%v", result, err)
+	srv.queryWG.Wait()
+	if srv.cache.Size() != 0 {
+		t.Fatal("uncacheable preload must remove the old entry")
 	}
-	stored := srv.cache.GetAllEntries()[0]
-	if calls.Load() != 2 || !stored.CreatedAt.Equal(entry.CreatedAt) ||
-		!stored.ExpireTime.Equal(entry.ExpireTime) || result.Authority[0].Header().Ttl > 10 {
-		t.Fatal("failed refresh extended or replaced cached NXDOMAIN")
+	result, err := srv.Query("negative.example.", dns.TypeAAAA)
+	if err != nil || result == nil || result.CacheHit || result.Rcode != dns.RcodeNameError || result.TTL != 0 {
+		t.Fatalf("uncacheable refresh not returned correctly: result=%#v error=%v", result, err)
+	}
+	if calls.Load() != 3 || srv.cache.Size() != 0 {
+		t.Fatal("uncacheable result entered cache")
 	}
 }
 
-func TestNegativeFallbackOnWireAndNoCache(t *testing.T) {
+func TestSOALessNegativeOnWireAndNoCache(t *testing.T) {
 	for _, concurrent := range []bool{false, true} {
 		for _, code := range []int{dns.RcodeSuccess, dns.RcodeNameError} {
 			for _, chain := range []string{"direct", "completed", "inline"} {
@@ -158,7 +160,7 @@ func TestNegativeFallbackOnWireAndNoCache(t *testing.T) {
 								wantAnswers = 1
 							}
 							if response.Rcode != code || len(response.Ns) != 0 || len(response.Answer) != wantAnswers {
-								t.Fatalf("wire fallback lost RCODE/CNAME or synthesized authority: %v", response)
+								t.Fatalf("wire response lost RCODE/CNAME or synthesized authority: %v", response)
 							}
 						}
 					}
@@ -167,10 +169,58 @@ func TestNegativeFallbackOnWireAndNoCache(t *testing.T) {
 						wantCalls *= 2
 					}
 					if calls.Load() != wantCalls || srv.cache.Size() != 0 {
-						t.Fatalf("fallback was cached: calls=%d want=%d cache=%d", calls.Load(), wantCalls, srv.cache.Size())
+						t.Fatalf("SOA-less negative was cached: calls=%d want=%d cache=%d", calls.Load(), wantCalls, srv.cache.Size())
+					}
+					srv.warnLimit.mu.Lock()
+					warningKeys := len(srv.warnLimit.entries)
+					srv.warnLimit.mu.Unlock()
+					if warningKeys != 0 {
+						t.Fatalf("SOA-less negative entered the warning path: %d keys", warningKeys)
 					}
 				})
 			}
+		}
+	}
+}
+
+func TestUpstreamErrorRcodeWinsWithoutCacheOrWarning(t *testing.T) {
+	for _, code := range []int{dns.RcodeFormatError, dns.RcodeServerFailure, dns.RcodeRefused, dns.RcodeNotImplemented} {
+		for _, concurrent := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/concurrent=%t", dns.RcodeToString[code], concurrent), func(t *testing.T) {
+				var calls atomic.Int32
+				srv := newNegativeTestServer(t, &calls, func(response *dns.Msg) {
+					response.Rcode = code
+					response.Answer = []dns.RR{&dns.A{
+						Hdr: dns.RR_Header{Name: response.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+						A:   net.IPv4(192, 0, 2, 99),
+					}}
+				})
+				srv.cfg.ConcurrentQuery = concurrent
+				srv.cfg.Rules = []config.Rule{{
+					ID: "all", IgnoreDomainMatch: true, Action: "ipv4+ipv6",
+					Upstreams: []string{"test"}, IPv4NFTSets: []string{"inet/fw4/test"},
+				}}
+				manager := &recordingNFTSetManager{added: make(map[string][]string), contents: make(map[string][]string)}
+				srv.nftMgr = manager
+				for pass := 0; pass < 2; pass++ {
+					result, err := srv.Query("error.example.", dns.TypeA)
+					if err != nil || result == nil || result.Rcode != code || result.CacheHit || result.TTL != 0 || result.Error != "" {
+						t.Fatalf("pass %d: upstream %s not returned as the winner: result=%#v error=%v", pass, dns.RcodeToString[code], result, err)
+					}
+				}
+				if calls.Load() != 2 || srv.cache.Size() != 0 {
+					t.Fatalf("error RCODE was cached: calls=%d cache=%d", calls.Load(), srv.cache.Size())
+				}
+				if len(manager.added) != 0 {
+					t.Fatalf("error RCODE addresses entered nftables: %v", manager.added)
+				}
+				srv.warnLimit.mu.Lock()
+				warningKeys := len(srv.warnLimit.entries)
+				srv.warnLimit.mu.Unlock()
+				if warningKeys != 0 {
+					t.Fatalf("winning response entered the failure path: %d keys", warningKeys)
+				}
+			})
 		}
 	}
 }

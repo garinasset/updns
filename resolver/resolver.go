@@ -199,8 +199,8 @@ func allUpstreamsFailed(domain string, failures []string, allNotReady bool) erro
 	return errors.New(msg)
 }
 
-// ResolveMultiple resolves against multiple upstreams
-// Returns the first successful response
+// ResolveMultiple queries upstreams in order and returns the first valid
+// final response, whatever its RCODE.
 func (r *Resolver) ResolveMultiple(ctx context.Context, domain string, queryType uint16, upstreamNames []string) (*dns.Msg, string, error) {
 	if len(upstreamNames) == 0 {
 		return nil, "", fmt.Errorf("no upstreams specified")
@@ -208,24 +208,12 @@ func (r *Resolver) ResolveMultiple(ctx context.Context, domain string, queryType
 
 	var failures []string
 	allNotReady := true
-	var fallback *dns.Msg
-	var fallbackName string
 	for _, name := range upstreamNames {
 		if err := ctx.Err(); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) && fallback != nil {
-				logging.Debugf("using uncacheable %s fallback for %s from %s after deadline", dns.RcodeToString[fallback.Rcode], domain, fallbackName)
-				return fallback, fallbackName, nil
-			}
 			return nil, "", err
 		}
 		resp, err := r.Resolve(ctx, domain, queryType, name)
 		if err == nil {
-			if uncacheableNegative(resp) {
-				if fallback == nil {
-					fallback, fallbackName = resp, name
-				}
-				continue
-			}
 			return resp, name, nil
 		}
 		if !notReady(name, err) {
@@ -234,18 +222,14 @@ func (r *Resolver) ResolveMultiple(ctx context.Context, domain string, queryType
 		failures = append(failures, upstreamFailure(name, resp, err))
 	}
 
-	if ctx.Err() == context.Canceled {
-		return nil, "", ctx.Err()
-	}
-	if fallback != nil {
-		logging.Debugf("using uncacheable %s fallback for %s from %s; no complete answer", dns.RcodeToString[fallback.Rcode], domain, fallbackName)
-		return fallback, fallbackName, nil
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
 	return nil, "", allUpstreamsFailed(domain, failures, allNotReady)
 }
 
-// ResolveConcurrent resolves against multiple upstreams concurrently
-// Returns the first successful response
+// ResolveConcurrent queries all upstreams at once and returns the first valid
+// final response, whatever its RCODE; the remaining queries are canceled.
 func (r *Resolver) ResolveConcurrent(ctx context.Context, domain string, queryType uint16, upstreamNames []string) (*dns.Msg, string, error) {
 	if len(upstreamNames) == 0 {
 		return nil, "", fmt.Errorf("no upstreams specified")
@@ -253,46 +237,28 @@ func (r *Resolver) ResolveConcurrent(ctx context.Context, domain string, queryTy
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	respChan := make(chan struct {
+	type answer struct {
 		msg  *dns.Msg
 		name string
 		err  error
-	}, len(upstreamNames))
-
-	// Launch concurrent queries
+	}
+	respChan := make(chan answer, len(upstreamNames))
 	for _, name := range upstreamNames {
 		go func(upstreamName string) {
 			resp, err := r.Resolve(ctx, domain, queryType, upstreamName)
-			respChan <- struct {
-				msg  *dns.Msg
-				name string
-				err  error
-			}{resp, upstreamName, err}
+			respChan <- answer{resp, upstreamName, err}
 		}(name)
 	}
 
-	// Wait for first successful response
 	var failures []string
 	allNotReady := true
-	var fallback *dns.Msg
-	var fallbackName string
 	for i := 0; i < len(upstreamNames); i++ {
 		select {
 		case result := <-respChan:
 			if err := ctx.Err(); err != nil {
-				if errors.Is(err, context.DeadlineExceeded) && fallback != nil {
-					logging.Debugf("using uncacheable %s fallback for %s from %s after deadline", dns.RcodeToString[fallback.Rcode], domain, fallbackName)
-					return fallback, fallbackName, nil
-				}
 				return nil, "", err
 			}
 			if result.err == nil {
-				if uncacheableNegative(result.msg) {
-					if fallback == nil {
-						fallback, fallbackName = result.msg, result.name
-					}
-					continue
-				}
 				cancel()
 				return result.msg, result.name, nil
 			}
@@ -301,20 +267,12 @@ func (r *Resolver) ResolveConcurrent(ctx context.Context, domain string, queryTy
 			}
 			failures = append(failures, upstreamFailure(result.name, result.msg, result.err))
 		case <-ctx.Done():
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) && fallback != nil {
-				logging.Debugf("using uncacheable %s fallback for %s from %s after deadline", dns.RcodeToString[fallback.Rcode], domain, fallbackName)
-				return fallback, fallbackName, nil
-			}
 			return nil, "", ctx.Err()
 		}
 	}
 
-	if ctx.Err() == context.Canceled {
-		return nil, "", ctx.Err()
-	}
-	if fallback != nil {
-		logging.Debugf("using uncacheable %s fallback for %s from %s; no complete answer", dns.RcodeToString[fallback.Rcode], domain, fallbackName)
-		return fallback, fallbackName, nil
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
 	return nil, "", allUpstreamsFailed(domain, failures, allNotReady)
 }
@@ -342,7 +300,7 @@ func (r *Resolver) query(ctx context.Context, domain string, queryType uint16, u
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	original := msg
+	question := msg.Question[0]
 	var combined *dns.Msg
 	for {
 		resp, err := r.exchange(ctx, msg, upstream, timeout)
@@ -366,32 +324,16 @@ func (r *Resolver) query(ctx context.Context, domain string, queryType uint16, u
 			combined.AuthenticatedData = false
 			combined.Authoritative = false
 		}
-		name, positive, err := responseTerminal(original.Question[0], combined)
+		next, err := pendingTerminal(question, msg.Question[0].Name, combined)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateResponse(original, combined); err == nil {
-			if !positive {
-				for _, rr := range combined.Ns {
-					if soa, ok := rr.(*dns.SOA); ok && soa.Minttl < soa.Hdr.Ttl {
-						soa.Hdr.Ttl = soa.Minttl
-					}
-				}
-			}
+		if next == "" {
+			normalizeNegativeSOA(question, combined)
 			return combined, nil
-		} else {
-			// NXDOMAIN already denies the chain terminal; NOERROR must first
-			// complete an explicit terminal query before it can be a fallback.
-			if uncacheableNegative(combined) && (resp.Rcode == dns.RcodeNameError ||
-				len(resp.Answer) == 0 && strings.EqualFold(name, msg.Question[0].Name)) {
-				return combined, nil
-			}
-			if resp.Rcode != dns.RcodeSuccess || strings.EqualFold(name, msg.Question[0].Name) {
-				return nil, err
-			}
 		}
 		msg = new(dns.Msg)
-		msg.SetQuestion(name, queryType)
+		msg.SetQuestion(next, queryType)
 		msg.RecursionDesired = true
 	}
 }
@@ -496,6 +438,7 @@ func withDefaultPort(address, port string) string {
 	return net.JoinHostPort(address, port)
 }
 
+// validateReply checks that a reply answers the query, whatever its RCODE.
 func validateReply(query, response *dns.Msg) error {
 	if response == nil {
 		return errors.New("no DNS response")
@@ -503,76 +446,112 @@ func validateReply(query, response *dns.Msg) error {
 	if !response.Response || response.Id != query.Id || response.Opcode != query.Opcode {
 		return errors.New("DNS response header does not match query")
 	}
-	if response.Rcode != dns.RcodeSuccess && response.Rcode != dns.RcodeNameError {
-		return fmt.Errorf("DNS response code %s (%d) is not a final answer (question count: %d)",
-			dns.RcodeToString[response.Rcode], response.Rcode, len(response.Question))
-	}
 	if len(response.Question) != 1 {
-		return errors.New("DNS response must contain the original question")
+		return fmt.Errorf("DNS response %s must contain the original question (question count: %d)",
+			rcodeText(response.Rcode), len(response.Question))
 	}
 	want, got := query.Question[0], response.Question[0]
 	if !strings.EqualFold(want.Name, got.Name) || want.Qtype != got.Qtype || want.Qclass != got.Qclass {
-		return errors.New("DNS response question does not match query")
+		return fmt.Errorf("DNS response %s question does not match query", rcodeText(response.Rcode))
 	}
 	return nil
 }
 
+func rcodeText(rcode int) string {
+	if text, ok := dns.RcodeToString[rcode]; ok {
+		return text
+	}
+	return fmt.Sprintf("RCODE %d", rcode)
+}
+
+// validateResponse reports whether a single reply is a final response.
 func validateResponse(query, response *dns.Msg) error {
 	if err := validateReply(query, response); err != nil {
 		return err
 	}
-	if response.Truncated {
-		return errors.New("DNS response is still truncated")
-	}
-	name, positive, err := responseTerminal(query.Question[0], response)
+	next, err := pendingTerminal(query.Question[0], query.Question[0].Name, response)
 	if err != nil {
 		return err
 	}
-	if positive {
-		if response.Rcode == dns.RcodeNameError {
-			return errors.New("NXDOMAIN response contains a positive answer")
-		}
-		return nil
+	if next != "" {
+		return fmt.Errorf("DNS response ends with an unresolved CNAME chain at %s", next)
 	}
-	for _, rr := range response.Ns {
-		if soa, ok := rr.(*dns.SOA); ok && soa.Hdr.Class == query.Question[0].Qclass &&
-			dns.IsSubDomain(strings.ToLower(soa.Hdr.Name), strings.ToLower(name)) {
-			return nil
-		}
-	}
-	return errors.New("DNS response has no terminal answer or enclosing SOA for a negative answer")
+	return nil
 }
 
-// NOERROR requires an explicitly queried empty terminal; NXDOMAIN itself
-// denies the terminal. Neither can supply a negative-cache lifetime without SOA.
-func uncacheableNegative(response *dns.Msg) bool {
-	if response == nil || (response.Rcode != dns.RcodeSuccess && response.Rcode != dns.RcodeNameError) ||
-		response.Truncated || len(response.Question) != 1 || len(response.Ns) != 0 {
-		return false
+// pendingTerminal returns the CNAME chain terminal still to be queried, or ""
+// once the response is final. asked is the name of the latest query sent.
+func pendingTerminal(question dns.Question, asked string, response *dns.Msg) (string, error) {
+	if response.Truncated {
+		return "", errors.New("DNS response is still truncated")
 	}
-	_, positive, err := responseTerminal(response.Question[0], response)
-	if err != nil || positive {
-		return false
+	terminal, positive, err := responseTerminal(question, response)
+	if err != nil {
+		return "", err
 	}
-	aliases := make(map[string]string, len(response.Answer))
-	for _, rr := range response.Answer {
-		cname, ok := rr.(*dns.CNAME)
-		if !ok || cname.Hdr.Class != response.Question[0].Qclass {
-			return false
+	switch response.Rcode {
+	case dns.RcodeSuccess:
+		if positive || coveringSOA(question, terminal, response) {
+			return "", nil
 		}
-		name, target := strings.ToLower(cname.Hdr.Name), strings.ToLower(cname.Target)
-		if previous, exists := aliases[name]; exists && previous != target {
-			return false
+		if !strings.EqualFold(terminal, asked) {
+			return terminal, nil
 		}
-		aliases[name] = target
+		if isReferral(response) {
+			return "", errors.New("DNS response is a referral, not a final answer")
+		}
+	case dns.RcodeNameError:
+		if positive {
+			return "", errors.New("NXDOMAIN response contains a positive answer")
+		}
 	}
-	name := strings.ToLower(response.Question[0].Name)
-	var followed int
-	for target, ok := aliases[name]; ok; target, ok = aliases[name] {
-		followed++
-		name = target
+	return "", nil
+}
+
+func coveringSOA(question dns.Question, terminal string, response *dns.Msg) bool {
+	for _, rr := range response.Ns {
+		if soa, ok := rr.(*dns.SOA); ok && soa.Hdr.Class == question.Qclass &&
+			dns.IsSubDomain(strings.ToLower(soa.Hdr.Name), strings.ToLower(terminal)) {
+			return true
+		}
 	}
-	return followed == len(aliases)
+	return false
+}
+
+// isReferral reports delegation NS records without an SOA (RFC 2308 type 4).
+func isReferral(response *dns.Msg) bool {
+	referral := false
+	for _, rr := range response.Ns {
+		switch rr.(type) {
+		case *dns.SOA:
+			return false
+		case *dns.NS:
+			referral = true
+		}
+	}
+	return referral
+}
+
+// negativeTerminal reports a NODATA/NXDOMAIN response and its chain terminal.
+func negativeTerminal(question dns.Question, response *dns.Msg) (string, bool) {
+	if response.Rcode != dns.RcodeSuccess && response.Rcode != dns.RcodeNameError {
+		return "", false
+	}
+	terminal, positive, err := responseTerminal(question, response)
+	return terminal, err == nil && !positive
+}
+
+// normalizeNegativeSOA caps the SOA TTL of a negative response at SOA.MINIMUM.
+func normalizeNegativeSOA(question dns.Question, response *dns.Msg) {
+	terminal, negative := negativeTerminal(question, response)
+	if !negative || !coveringSOA(question, terminal, response) {
+		return
+	}
+	for _, rr := range response.Ns {
+		if soa, ok := rr.(*dns.SOA); ok && soa.Minttl < soa.Hdr.Ttl {
+			soa.Hdr.Ttl = soa.Minttl
+		}
+	}
 }
 
 func responseTerminal(question dns.Question, response *dns.Msg) (string, bool, error) {
@@ -624,8 +603,13 @@ func ExtractIPs(msg *dns.Msg) ([]string, []string) {
 	return ipv4s, ipv6s
 }
 
-// GetMinTTL returns the minimum TTL from the response
+// GetMinTTL returns the cache lifetime of a response; 0 means uncacheable.
+// Error RCODEs are never cached, and a negative answer is cacheable only with
+// an SOA covering the chain terminal (RFC 2308).
 func GetMinTTL(msg *dns.Msg) uint32 {
+	if msg.Rcode != dns.RcodeSuccess && msg.Rcode != dns.RcodeNameError {
+		return 0
+	}
 	var minTTL uint32
 	found := false
 	for _, answer := range msg.Answer {
@@ -635,18 +619,27 @@ func GetMinTTL(msg *dns.Msg) uint32 {
 			found = true
 		}
 	}
-	if found {
-		if len(msg.Question) == 1 {
-			_, positive, err := responseTerminal(msg.Question[0], msg)
-			if err == nil && (!positive || msg.Rcode == dns.RcodeNameError) {
-				if negativeTTL := NegativeTTL(msg); negativeTTL < minTTL {
-					minTTL = negativeTTL
-				}
-			}
+	if len(msg.Question) != 1 {
+		if found {
+			return minTTL
 		}
+		return NegativeTTL(msg)
+	}
+	question := msg.Question[0]
+	terminal, positive, err := responseTerminal(question, msg)
+	if err != nil || positive && msg.Rcode != dns.RcodeSuccess {
+		return 0
+	}
+	if positive {
 		return minTTL
 	}
-	return NegativeTTL(msg)
+	if !coveringSOA(question, terminal, msg) {
+		return 0
+	}
+	if negativeTTL := NegativeTTL(msg); !found || negativeTTL < minTTL {
+		return negativeTTL
+	}
+	return minTTL
 }
 
 // NegativeTTL returns the RFC 2308 negative-cache lifetime from the SOA.

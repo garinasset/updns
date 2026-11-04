@@ -512,6 +512,7 @@ func TestPreloadRefreshesNearExpiryCacheEntry(t *testing.T) {
 	})
 
 	srv.preloadCacheEntries()
+	srv.queryWG.Wait()
 
 	entry, found := srv.cache.Get("example.com.:1")
 	if !found {
@@ -576,9 +577,8 @@ func TestPreloadUsesBoundedConcurrentWorkers(t *testing.T) {
 			CreatedAt: now.Add(-100 * time.Second), ExpireTime: now.Add(20 * time.Second), HitCount: 5,
 		})
 	}
-	done := make(chan struct{})
-	go func() { srv.preloadCacheEntries(); close(done) }()
-	defer func() { unblock(); <-done }()
+	srv.preloadCacheEntries()
+	defer func() { unblock(); srv.queryWG.Wait() }()
 	for i := 0; i < preloadConcurrency; i++ {
 		select {
 		case <-started:
@@ -592,6 +592,13 @@ func TestPreloadUsesBoundedConcurrentWorkers(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 	unblock()
+	done := make(chan struct{})
+	go func() {
+		srv.queryWG.Wait()
+		srv.preloadCacheEntries()
+		srv.queryWG.Wait()
+		close(done)
+	}()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -944,8 +951,10 @@ func startServFailUpstream(t *testing.T, queries *atomic.Int32) string {
 		PacketConn: packetConn,
 		Handler: dns.HandlerFunc(func(w dns.ResponseWriter, request *dns.Msg) {
 			queries.Add(1)
+			// Omitting the question makes the SERVFAIL invalid, so it cannot win.
 			response := new(dns.Msg)
 			response.SetRcode(request, dns.RcodeServerFailure)
+			response.Question = nil
 			_ = w.WriteMsg(response)
 		}),
 	}
@@ -1079,7 +1088,7 @@ func TestConcurrentQueryOnlyProcessesWinningResponse(t *testing.T) {
 				response.SetReply(request)
 				ip := net.IPv4(192, 0, 2, 1)
 				if bad {
-					response.Rcode = dns.RcodeFormatError
+					response.Question[0].Qtype = dns.TypeAAAA
 					ip = net.IPv4(192, 0, 2, 99)
 				} else {
 					<-badReturned
@@ -1205,7 +1214,7 @@ func TestCNAMECompletionCachesTerminalNegativeResult(t *testing.T) {
 	}
 }
 
-func TestCNAMEFallbackIsReturnedButNotCached(t *testing.T) {
+func TestSOALessCNAMENODATAIsReturnedButNotCached(t *testing.T) {
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -1249,10 +1258,10 @@ func TestCNAMEFallbackIsReturnedButNotCached(t *testing.T) {
 		}
 		if result.CacheHit || result.Rcode != dns.RcodeSuccess || result.TTL != 0 ||
 			len(result.Records) != 1 || len(result.Authority) != 0 {
-			t.Fatalf("incorrect uncacheable CNAME fallback: %#v", result)
+			t.Fatalf("incorrect uncacheable CNAME NODATA: %#v", result)
 		}
 	}
 	if got := calls.Load(); got != 4 || srv.cache.Size() != 0 {
-		t.Fatalf("fallback was cached: upstream calls=%d cache size=%d", got, srv.cache.Size())
+		t.Fatalf("SOA-less NODATA was cached: upstream calls=%d cache size=%d", got, srv.cache.Size())
 	}
 }

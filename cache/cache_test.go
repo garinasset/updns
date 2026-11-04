@@ -170,7 +170,7 @@ func TestCacheNeedPreload(t *testing.T) {
 		CreatedAt:  time.Now().Add(-80 * time.Second),
 	}
 
-	// Should need preload (less than 25% TTL remaining)
+	// Should need preload (80% TTL elapsed).
 	if !entry.NeedPreload() {
 		t.Error("Expected entry to need preload")
 	}
@@ -216,14 +216,14 @@ func TestRefreshPreservesHitsReceivedAfterScan(t *testing.T) {
 	defer c.Stop()
 	now := time.Now()
 	c.Set("key", &CacheEntry{TTL: 100, CreatedAt: now.Add(-80 * time.Second), ExpireTime: now.Add(20 * time.Second), HitCount: 7})
-	scanned := c.GetEntriesNeedingPreload()[0]
+	scanned, epoch := c.Snapshot("key")
 	for i := 0; i < 3; i++ {
 		if _, ok := c.Get("key"); !ok {
 			t.Fatal("entry unexpectedly expired")
 		}
 	}
 	replacement := &CacheEntry{TTL: 200, CreatedAt: now, ExpireTime: now.Add(200 * time.Second)}
-	if !c.Refresh("key", scanned, replacement) {
+	if !c.Commit("key", scanned, epoch, replacement) {
 		t.Fatal("refresh should succeed")
 	}
 	got := c.GetAllEntries()[0]
@@ -242,7 +242,7 @@ func TestRefreshDoesNotOverwriteReplacedOrRemovedEntry(t *testing.T) {
 			defer c.Stop()
 			now := time.Now()
 			c.Set("key", &CacheEntry{TTL: 100, CreatedAt: now.Add(-80 * time.Second), ExpireTime: now.Add(20 * time.Second)})
-			scanned := c.GetEntriesNeedingPreload()[0]
+			scanned, epoch := c.Snapshot("key")
 			next := &CacheEntry{TTL: 200, CreatedAt: now, ExpireTime: now.Add(200 * time.Second), HitCount: 5}
 			switch action {
 			case "replace":
@@ -252,11 +252,11 @@ func TestRefreshDoesNotOverwriteReplacedOrRemovedEntry(t *testing.T) {
 			case "clear":
 				c.Clear()
 			}
-			if c.Refresh("key", scanned, next) {
+			if c.Commit("key", scanned, epoch, next) {
 				t.Fatal("stale refresh should not be committed")
 			}
 			if action == "replace" {
-				if got := c.GetAllEntries()[0]; got.HitCount != 5 {
+				if got := c.GetAllEntries()[0]; got.HitCount != 0 {
 					t.Fatalf("new entry was changed: %#v", got)
 				}
 			} else if c.Size() != 0 {

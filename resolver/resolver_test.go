@@ -196,10 +196,11 @@ func TestValidateResponse(t *testing.T) {
 			soa.Hdr.Ttl, soa.Minttl = 0, 0
 			m.Ns = []dns.RR{soa}
 		}, true},
-		{"FORMERR", func(m *dns.Msg) { m.Rcode = dns.RcodeFormatError }, false},
-		{"SERVFAIL", func(m *dns.Msg) { m.Rcode = dns.RcodeServerFailure }, false},
-		{"REFUSED", func(m *dns.Msg) { m.Rcode = dns.RcodeRefused }, false},
-		{"NOTIMP", func(m *dns.Msg) { m.Rcode = dns.RcodeNotImplemented }, false},
+		{"FORMERR", func(m *dns.Msg) { m.Rcode = dns.RcodeFormatError }, true},
+		{"SERVFAIL", func(m *dns.Msg) { m.Rcode = dns.RcodeServerFailure }, true},
+		{"REFUSED", func(m *dns.Msg) { m.Rcode = dns.RcodeRefused }, true},
+		{"REFUSED without question", func(m *dns.Msg) { m.Rcode = dns.RcodeRefused; m.Question = nil }, false},
+		{"NOTIMP", func(m *dns.Msg) { m.Rcode = dns.RcodeNotImplemented }, true},
 		{"truncated", func(m *dns.Msg) { m.Truncated = true }, false},
 		{"query instead of reply", func(m *dns.Msg) { m.Response = false }, false},
 		{"wrong ID", func(m *dns.Msg) { m.Id++ }, false},
@@ -208,10 +209,10 @@ func TestValidateResponse(t *testing.T) {
 		{"wrong type", func(m *dns.Msg) { m.Question[0].Qtype = dns.TypeAAAA }, false},
 		{"wrong class", func(m *dns.Msg) { m.Question[0].Qclass = dns.ClassCHAOS }, false},
 		{"missing question", func(m *dns.Msg) { m.Question = nil }, false},
-		{"empty without SOA", func(m *dns.Msg) { m.Answer = nil }, false},
-		{"NXDOMAIN without SOA", func(m *dns.Msg) { m.Rcode = dns.RcodeNameError; m.Answer = nil }, false},
+		{"empty without SOA", func(m *dns.Msg) { m.Answer = nil }, true},
+		{"NXDOMAIN without SOA", func(m *dns.Msg) { m.Rcode = dns.RcodeNameError; m.Answer = nil }, true},
 		{"contradictory NXDOMAIN", func(m *dns.Msg) { m.Rcode = dns.RcodeNameError; m.Ns = []dns.RR{testSOA()} }, false},
-		{"unrelated answer", func(m *dns.Msg) { m.Answer[0].Header().Name = "other.example." }, false},
+		{"unrelated answer", func(m *dns.Msg) { m.Answer[0].Header().Name = "other.example." }, true},
 		{"referral", func(m *dns.Msg) {
 			m.Answer = nil
 			m.Ns = []dns.RR{&dns.NS{Hdr: dns.RR_Header{Name: "example.", Rrtype: dns.TypeNS, Class: dns.ClassINET}, Ns: "ns.example."}}
@@ -221,7 +222,7 @@ func TestValidateResponse(t *testing.T) {
 			soa := testSOA()
 			soa.Header().Name = "other."
 			m.Ns = []dns.RR{soa}
-		}, false},
+		}, true},
 		{"CNAME only", func(m *dns.Msg) {
 			m.Answer = []dns.RR{&dns.CNAME{
 				Hdr:    dns.RR_Header{Name: "www.example.", Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 300},
@@ -311,7 +312,7 @@ func startDNSUpstream(t *testing.T, network, address string, handler dns.Handler
 
 func TestUpstreamSelectionSkipsNonFinalResponses(t *testing.T) {
 	for _, concurrent := range []bool{false, true} {
-		for _, kind := range []string{"FORMERR", "empty", "CNAME only", "truncated TCP"} {
+		for _, kind := range []string{"REFUSED without question", "wrong question", "referral", "CNAME only", "truncated TCP"} {
 			t.Run(fmt.Sprintf("concurrent=%t/%s", concurrent, kind), func(t *testing.T) {
 				badReturned := make(chan struct{})
 				var returned sync.Once
@@ -322,10 +323,17 @@ func TestUpstreamSelectionSkipsNonFinalResponses(t *testing.T) {
 				bad := startDNSUpstream(t, badNetwork, "127.0.0.1:0", func(w dns.ResponseWriter, query *dns.Msg) {
 					response := testAnswer(query)
 					switch kind {
-					case "FORMERR":
-						response.Rcode = dns.RcodeFormatError
-					case "empty":
+					case "REFUSED without question":
+						response.Rcode = dns.RcodeRefused
+						response.Question = nil
 						response.Answer = nil
+					case "wrong question":
+						response.Question[0].Name = "other.example."
+					case "referral":
+						response.Answer = nil
+						response.Ns = []dns.RR{&dns.NS{
+							Hdr: dns.RR_Header{Name: "example.", Rrtype: dns.TypeNS, Class: dns.ClassINET}, Ns: "ns.example.",
+						}}
 					case "CNAME only":
 						response.Answer = []dns.RR{&dns.CNAME{
 							Hdr:    dns.RR_Header{Name: query.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET},
@@ -684,7 +692,7 @@ func TestCNAMECompletion(t *testing.T) {
 				t.Fatal(err)
 			}
 			response, err := r.Resolve(context.Background(), "www.example.", dns.TypeA, "same-upstream")
-			valid := terminal == "positive" || terminal == "NODATA" || terminal == "NXDOMAIN" || terminal == "empty"
+			valid := terminal != "loop" && terminal != "limit"
 			if (err == nil) != valid {
 				t.Fatalf("completion error=%v, want valid=%t", err, valid)
 			}
@@ -704,7 +712,7 @@ func TestCNAMECompletion(t *testing.T) {
 				t.Fatalf("original question or CNAME chain lost: %v", response)
 			}
 			wantTTL := uint32(10)
-			if terminal == "empty" {
+			if terminal == "empty" || terminal == "FORMERR" {
 				wantTTL = 0
 			}
 			if got := GetMinTTL(response); got != wantTTL {
@@ -716,7 +724,10 @@ func TestCNAMECompletion(t *testing.T) {
 			if terminal == "NXDOMAIN" && response.Rcode != dns.RcodeNameError {
 				t.Fatal("terminal NXDOMAIN not propagated")
 			}
-			if terminal != "positive" && terminal != "empty" && len(response.Ns) != 1 {
+			if terminal == "FORMERR" && response.Rcode != dns.RcodeFormatError {
+				t.Fatal("terminal FORMERR not propagated")
+			}
+			if (terminal == "NODATA" || terminal == "NXDOMAIN") && len(response.Ns) != 1 {
 				t.Fatal("negative SOA missing")
 			}
 		})

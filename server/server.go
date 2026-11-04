@@ -38,6 +38,10 @@ type Server struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
 	preloadWG         sync.WaitGroup
+	queryMu           sync.Mutex
+	queryWG           sync.WaitGroup
+	flights           map[string]*queryFlight
+	preloading        int
 	nftRefreshNow     chan struct{}
 	logQuery          bool
 	started           bool
@@ -105,6 +109,7 @@ type QueryResult struct {
 	QueryType    string          `json:"query_type"`
 	Answers      []string        `json:"answers"`
 	CacheHit     bool            `json:"cache_hit"`
+	PrefetchWait bool            `json:"prefetch_wait,omitempty"`
 	MatchedRule  string          `json:"matched_rule"`
 	Action       string          `json:"action"`
 	IPv4NFTSets  []string        `json:"ipv4_nft_sets"`
@@ -425,6 +430,12 @@ func (s *Server) Stop() error {
 		s.tcpServer.Shutdown()
 	}
 	s.preloadWG.Wait()
+	s.queryMu.Lock()
+	for _, flight := range s.flights {
+		flight.cancel()
+	}
+	s.queryMu.Unlock()
+	s.queryWG.Wait()
 	if s.cache != nil {
 		s.cache.Stop()
 	}
@@ -444,10 +455,16 @@ func (s *Server) Query(domain string, queryType uint16) (*QueryResult, error) {
 
 // queryFrom is Query with the requesting client's address, used for logging.
 func (s *Server) queryFrom(domain string, queryType uint16, client string) (*QueryResult, error) {
-	domain = dns.Fqdn(domain)
+	domain = strings.ToLower(dns.Fqdn(domain))
 	cacheKey := fmt.Sprintf("%s:%d", domain, queryType)
+	s.queryMu.Lock()
+	if err := s.ctx.Err(); err != nil {
+		s.queryMu.Unlock()
+		return nil, err
+	}
 	if s.cache != nil {
 		if entry, found := s.cache.Get(cacheKey); found {
+			s.queryMu.Unlock()
 			result := s.queryMetadata(domain, queryType)
 			result.CacheHit = true
 			result.Records = entry.Answers
@@ -467,32 +484,36 @@ func (s *Server) queryFrom(domain string, queryType uint16, client string) (*Que
 			return result, nil
 		}
 	}
-
-	result, resolveErr := s.resolveQueryDetail(domain, queryType, client)
-	if result == nil {
-		if resolveErr == nil {
-			resolveErr = fmt.Errorf("DNS resolution failed for %s", domain)
+	flight := s.flights[cacheKey]
+	waited := flight != nil && flight.preload
+	if flight == nil {
+		var previous *cache.CacheEntry
+		var epoch uint64
+		if s.cache != nil {
+			previous, epoch = s.cache.Snapshot(cacheKey)
+			s.cache.Suspend(cacheKey)
 		}
-		return nil, resolveErr
+		flight = s.startQueryLocked(cacheKey, domain, queryType, client, previous, epoch, false)
 	}
-	if s.cache != nil && result.TTL > 0 {
-		now := time.Now()
-		s.cache.Set(cacheKey, &cache.CacheEntry{
-			Query:      domain,
-			QueryType:  queryType,
-			Answers:    result.Records,
-			Authority:  result.Authority,
-			Upstream:   result.UsedUpstream,
-			Rcode:      result.Rcode,
-			TTL:        result.TTL,
-			ExpireTime: now.Add(time.Duration(result.TTL) * time.Second),
-			CreatedAt:  now,
-		})
-		if s.started {
-			s.publishCacheSize()
+	s.queryMu.Unlock()
+	select {
+	case <-flight.done:
+		if flight.result == nil {
+			if waited {
+				result := s.queryMetadata(domain, queryType)
+				result.PrefetchWait = true
+				result.Rcode = dns.RcodeServerFailure
+				result.Error = failureReason(flight.err)
+				return result, flight.err
+			}
+			return nil, flight.err
 		}
+		result := cloneQueryResult(flight.result)
+		result.PrefetchWait = waited
+		return result, flight.err
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
 	}
-	return result, nil
 }
 
 func (s *Server) preloadLoop() {
@@ -509,54 +530,17 @@ func (s *Server) preloadLoop() {
 }
 
 func (s *Server) preloadCacheEntries() {
-	if s.cache == nil {
+	s.queryMu.Lock()
+	defer s.queryMu.Unlock()
+	if s.cache == nil || s.ctx.Err() != nil || s.preloading >= preloadConcurrency {
 		return
 	}
-	entries := s.cache.GetEntriesNeedingPreload()
-	jobs := make(chan *cache.CacheEntry)
-	var workers sync.WaitGroup
-	for i := 0; i < preloadConcurrency && i < len(entries); i++ {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for entry := range jobs {
-				if s.ctx.Err() != nil {
-					return
-				}
-				if !entry.NeedPreload() {
-					continue
-				}
-				result := s.resolveQuery(entry.Query, entry.QueryType)
-				if result == nil || result.TTL == 0 || s.ctx.Err() != nil {
-					continue
-				}
-				refreshedAt := time.Now()
-				s.cache.Refresh(fmt.Sprintf("%s:%d", entry.Query, entry.QueryType), entry, &cache.CacheEntry{
-					Query:      entry.Query,
-					QueryType:  entry.QueryType,
-					Answers:    result.Records,
-					Authority:  result.Authority,
-					Upstream:   result.UsedUpstream,
-					Rcode:      result.Rcode,
-					TTL:        result.TTL,
-					ExpireTime: refreshedAt.Add(time.Duration(result.TTL) * time.Second),
-					CreatedAt:  refreshedAt,
-				})
-			}
-		}()
-	}
-dispatch:
+	entries, epoch := s.cache.TakePreloads(preloadConcurrency - s.preloading)
 	for _, entry := range entries {
-		select {
-		case jobs <- entry:
-		case <-s.ctx.Done():
-			break dispatch
+		key := fmt.Sprintf("%s:%d", entry.Query, entry.QueryType)
+		if s.flights[key] == nil {
+			s.startQueryLocked(key, entry.Query, entry.QueryType, "", entry, epoch, true)
 		}
-	}
-	close(jobs)
-	workers.Wait()
-	if s.started && s.ctx.Err() == nil && len(entries) > 0 {
-		s.publishCacheSize()
 	}
 }
 
@@ -592,7 +576,7 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 		result, err := s.queryFrom(domain, queryType, client)
 		if s.logQuery {
 			logResult := result
-			if err != nil {
+			if err != nil && logResult == nil {
 				logResult = s.queryMetadata(domain, queryType)
 				logResult.Rcode = dns.RcodeServerFailure
 			}
@@ -615,6 +599,8 @@ func FormatQueryLog(kind string, result *QueryResult, client, ecs string) string
 	path := "Upstream Query"
 	if result.CacheHit {
 		path = "Cache Hit"
+	} else if result.PrefetchWait {
+		path = "Prefetch Hit"
 	} else if normalizeAction(result.Action) == "nxdomain" {
 		path = "NXDOMAIN RULE"
 	} else if normalizeAction(result.Action) == "zeroip" {
@@ -765,6 +751,10 @@ func (s *Server) resolveQueryFrom(domain string, queryType uint16, client string
 
 // resolveQueryDetail also returns the failure cause when the result is nil.
 func (s *Server) resolveQueryDetail(domain string, queryType uint16, client string) (*QueryResult, error) {
+	return s.resolveQueryDetailContext(s.ctx, domain, queryType, client)
+}
+
+func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, queryType uint16, client string) (*QueryResult, error) {
 	result := &QueryResult{
 		Domain:     domain,
 		QueryType:  dns.TypeToString[queryType],
@@ -816,7 +806,6 @@ func (s *Server) resolveQueryDetail(domain string, queryType uint16, client stri
 	}
 
 	// Other types have no overall deadline: each upstream uses its own timeout.
-	ctx := s.ctx
 	if svcb {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, svcbQueryTimeout)
@@ -895,7 +884,10 @@ func (s *Server) resolveQueryDetail(domain string, queryType uint16, client stri
 	result.Authority = append(result.Authority, resp.Ns...)
 	result.TTL = resolver.GetMinTTL(resp)
 
-	// Add to nftsets if needed
+	// Error RCODE responses are returned verbatim but their addresses are not trusted.
+	if resp.Rcode != dns.RcodeSuccess {
+		ipv4s, ipv6s = nil, nil
+	}
 	if len(result.IPv4NFTSets) > 0 && len(ipv4s) > 0 {
 		for _, setName := range result.IPv4NFTSets {
 			if err := s.nftMgr.AddIPsToSet(ipv4s, setName); err != nil {
@@ -950,7 +942,7 @@ func failureReason(err error) string {
 	case strings.Contains(msg, "unreachable"):
 		return "Network unreachable"
 	case strings.Contains(msg, "dns response"):
-		return "Upstream returned an error response"
+		return "Upstream returned an invalid response"
 	}
 	return "All upstreams failed"
 }
@@ -1041,8 +1033,18 @@ func normalizeAction(action string) string {
 
 // ClearCache clears the DNS cache
 func (s *Server) ClearCache() {
+	s.queryMu.Lock()
+	defer s.queryMu.Unlock()
+	for _, flight := range s.flights {
+		flight.cancel()
+	}
+	s.flights = nil
+	s.preloading = 0
 	if s.cache != nil {
 		s.cache.Clear()
+		if s.started {
+			s.publishCacheSize()
+		}
 	}
 	s.clearSVCBFailures()
 }

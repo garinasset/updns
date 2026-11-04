@@ -170,7 +170,10 @@ func (s *Server) QueryDomain(domain string) ([]*QueryResult, error) {
 	for _, queryType := range []uint16{dns.TypeA, dns.TypeAAAA} {
 		result, err := s.Query(domain, queryType)
 		if err != nil {
-			failed := s.queryMetadata(dns.Fqdn(domain), queryType)
+			failed := result
+			if failed == nil {
+				failed = s.queryMetadata(dns.Fqdn(domain), queryType)
+			}
 			failed.Rcode = dns.RcodeServerFailure
 			failed.Error = failureReason(err)
 			results = append(results, failed)
