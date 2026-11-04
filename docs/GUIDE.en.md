@@ -64,6 +64,8 @@ Rules are evaluated in order and evaluation stops at the first applicable match.
 
 Responses of `nxdomain` and `zeroip` are cached with a fixed TTL of 60 seconds and are not written to nftables sets.
 
+The `ipv4+ipv6`, `ipv4only`, and `ipv6only` actions filter only A/AAAA records; MX, TXT, NS, SOA, SRV, PTR, and other non-address records, as well as CNAMEs, are returned verbatim. HTTPS/SVCB records are not returned because their address hints would bypass address-family filtering and nftables sets.
+
 A rule (except `nxdomain` and `zeroip`) can select one or more upstreams and specify separate nftables sets for IPv4/IPv6. With concurrent query enabled, the rule's selected upstreams are queried concurrently and the first valid DNS response wins; otherwise they are queried one by one in configured order until a valid response is obtained. If no rule matches and there is no fallback rule, the whole upstream DNS list (if any) is used; when the local resolver is enabled, its upstreams come before the other upstreams.
 
 Both modes follow the same response and caching rules:

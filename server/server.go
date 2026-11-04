@@ -877,7 +877,9 @@ func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, q
 				ipv6s = append(ipv6s, record.AAAA.String())
 				result.Answers = append(result.Answers, record.AAAA.String())
 			}
-		case *dns.CNAME:
+		case *dns.HTTPS, *dns.SVCB:
+			// Address hints would bypass the rule's action filter and nftsets.
+		default:
 			result.Records = append(result.Records, dns.Copy(rr))
 		}
 	}

@@ -65,6 +65,8 @@ DoH 地址须为完整 HTTPS URL。IPv6 地址带端口时使用方括号，例�
 
 `nxdomain` 与 `zeroip` 响应的缓存 TTL 固定为 60 秒，且不写入 nftables set。
 
+`ipv4+ipv6`、`ipv4only`、`ipv6only` 只过滤 A/AAAA 记录；MX、TXT、NS、SOA、SRV、PTR 等非地址记录及 CNAME 原样返回。HTTPS/SVCB 记录可能携带地址提示，会绕过地址族过滤和 nftables set，因此不返回。
+
 规则（`nxdomain`、`zeroip` 除外）可选择一个或多个上游，并为 IPv4/IPv6 分别指定 nftables set。
 
 规则还可选择把其引用上游 DNS 端点的 IP 地址加入对应 nftables set。主机名（包括 DoH URL 主机名）会解析为 IP，并定期刷新；新地址会添加到集合中，不会自动从共享集合删除旧地址。

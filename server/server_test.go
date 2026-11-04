@@ -115,6 +115,53 @@ func TestResolveQueryAppliesRuleAddressFilter(t *testing.T) {
 	}
 }
 
+func TestResolveQueryPassesThroughNonAddressRecords(t *testing.T) {
+	upstreamAddress := startTestUpstream(t)
+	listPath := filepath.Join(t.TempDir(), "ipv4.txt")
+	if err := os.WriteFile(listPath, []byte("example.com\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.UseLocalResolv = false
+	cfg.CacheEnabled = false
+	cfg.DomainLists = []config.DomainList{{Name: "ipv4", File: listPath}}
+	cfg.Rules = []config.Rule{{
+		ID:          "v4-only",
+		DomainLists: []string{"ipv4"},
+		Upstreams:   []string{"test"},
+		Action:      "ipv4only",
+	}}
+
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+	if err := srv.RegisterUpstream(&config.UpstreamDNS{
+		Name: "test", Address: upstreamAddress, Protocol: "udp", Timeout: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.LoadDomainList("ipv4", listPath); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, qtype := range []uint16{dns.TypeMX, dns.TypeTXT} {
+		result := srv.resolveQuery("example.com.", qtype)
+		if result == nil || len(result.Records) != 1 || result.Records[0].Header().Rrtype != qtype {
+			t.Fatalf("%s answer was not passed through: %#v", dns.TypeToString[qtype], result)
+		}
+		if result.TTL != 55 {
+			t.Fatalf("%s TTL = %d, want 55", dns.TypeToString[qtype], result.TTL)
+		}
+	}
+
+	https := srv.resolveQuery("example.com.", dns.TypeHTTPS)
+	if https == nil || len(https.Records) != 0 {
+		t.Fatalf("HTTPS records with address hints must not bypass the rule action: %#v", https)
+	}
+}
+
 func TestFindMatchingRuleUsesConfiguredOrder(t *testing.T) {
 	listPath := filepath.Join(t.TempDir(), "domains.txt")
 	if err := os.WriteFile(listPath, []byte("example.com\n"), 0600); err != nil {
@@ -748,6 +795,22 @@ func startTestUpstream(t *testing.T) string {
 					Hdr:  dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 42},
 					AAAA: net.ParseIP("2001:db8::1"),
 				})
+			case dns.TypeMX:
+				response.Answer = append(response.Answer, &dns.MX{
+					Hdr:        dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: 55},
+					Preference: 10, Mx: "mx.example.com.",
+				})
+			case dns.TypeTXT:
+				response.Answer = append(response.Answer, &dns.TXT{
+					Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 55},
+					Txt: []string{"v=spf1 -all"},
+				})
+			case dns.TypeHTTPS:
+				response.Answer = append(response.Answer, &dns.HTTPS{SVCB: dns.SVCB{
+					Hdr:      dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeHTTPS, Class: dns.ClassINET, Ttl: 55},
+					Priority: 1, Target: ".",
+					Value: []dns.SVCBKeyValue{&dns.SVCBIPv6Hint{Hint: []net.IP{net.ParseIP("2001:db8::1")}}},
+				}})
 			}
 			_ = w.WriteMsg(response)
 		}),
