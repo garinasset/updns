@@ -198,9 +198,13 @@ A rule that selects "Do Not Match (Fallback Rule)" (`domain_match='0'`) is a fal
 | Backend default UCI config | [`updns`](../openwrt/updns/root/etc/config/updns) |
 | Package metadata and dependencies | [`openwrt/luci-app-updns/Makefile`](../openwrt/luci-app-updns/Makefile), [`openwrt/updns/Makefile`](../openwrt/updns/Makefile) |
 
-The page reads and saves configuration through UCI; local resolver entries appear as auto-generated `local-resolv-N` upstreams. Service status comes from rpcd `service.list`, the cache entry count from `/tmp/updns_cache_size`, and nftables sets from the page calling `nft -j list sets`. Domain lists are read and written through the rpcd file interface.
+The page reads and saves configuration through UCI; local resolver entries appear as auto-generated `local-resolv-N` upstreams. Custom upstream entries can be dragged to change their order, while generated entries remain fixed at the top and cannot be edited, deleted, or reordered. The global upstream order is used for default upstreams when no rule matches; upstreams explicitly selected by a rule retain the order in that rule's list. Service status comes from rpcd `service.list`, the cache entry count from `/tmp/updns_cache_size`, and nftables sets from the page calling `nft -j list sets`. Domain lists are read and written through the rpcd file interface.
 
 When changing the page, check the related UCI fields, the rpcd ACL, and backend behavior together. The ACL grants explicit file paths; when adding a new status file, file read/write path, or system command, update the ACL as well. Visible text uses `_()` and the PO translation must be kept in sync. If you change form sections or tab layout, review the mapping and ordering logic in the page.
+
+Generated and custom upstreams use the same table columns and reorder, edit, and delete controls. All three controls are disabled for generated entries, with a tooltip explaining their automatic origin.
+The upstream list retains column titles and hides only the column description row; the editor retains field titles and help text. Above the list, only local resolver import information or read errors are shown, without reorder instructions.
+The protocol column uses inline SVG line icons and pill labels: amber for UDP, green for TCP, royal blue for DoH, and deep blue text on a pale blue background for DoT. Protocol text remains visible instead of relying on color alone. Generated and custom entries share this presentation; configuration values and the editor's protocol selector are unchanged.
 
 ## dnsmasq Integration
 

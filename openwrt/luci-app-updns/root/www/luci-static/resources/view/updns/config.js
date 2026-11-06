@@ -476,14 +476,49 @@ function addRuntimeUpstreamRows(section, upstreams) {
 	if (!body)
 		return;
 
+	var headers = section.querySelectorAll('thead tr.cbi-section-table-titles th');
+	var descriptions = section.querySelectorAll('thead tr.cbi-section-table-descr th');
+	var fields = [ 'name', 'address', 'protocol', 'timeout' ];
+
 	upstreams.slice().reverse().forEach(function(upstream) {
+		var automaticTitle = _('Automatically generated; cannot be edited, deleted, or reordered.');
 		var row = E('tr', { 'class': 'tr cbi-section-table-row updns-runtime-upstream' }, [
 			E('td', { 'class': 'td cbi-value-field' }, upstream.name),
 			E('td', { 'class': 'td cbi-value-field' }, upstream.address),
 			E('td', { 'class': 'td cbi-value-field' }, 'UDP'),
 			E('td', { 'class': 'td cbi-value-field' }, '5'),
-			E('td', { 'class': 'td cbi-section-table-cell nowrap cbi-section-actions' }, _('Automatic'))
+			E('td', { 'class': 'td cbi-section-table-cell nowrap cbi-section-actions' },
+				E('div', {}, [
+					E('button', {
+						'type': 'button',
+						'class': 'cbi-button drag-handle center',
+						'disabled': true,
+						'draggable': false,
+						'title': automaticTitle,
+						'style': 'cursor:default; user-select:none; -webkit-user-select:none; display:inline-block;'
+					}, '☰'),
+					E('button', {
+						'type': 'button',
+						'class': 'btn cbi-button cbi-button-edit',
+						'disabled': true,
+						'title': automaticTitle
+					}, _('Edit')),
+					E('button', {
+						'type': 'button',
+						'class': 'btn cbi-button cbi-button-remove',
+						'disabled': true,
+						'title': automaticTitle
+					}, _('Delete'))
+				]))
 		]);
+		fields.forEach(function(field, index) {
+			row.cells[index].setAttribute('data-name', field);
+			row.cells[index].setAttribute('data-widget', 'CBI.DummyValue');
+			if (headers[index])
+				row.cells[index].setAttribute('data-title', headers[index].textContent);
+			if (descriptions[index])
+				row.cells[index].setAttribute('data-description', descriptions[index].textContent);
+		});
 		body.insertBefore(row, body.firstChild);
 	});
 }
@@ -495,12 +530,56 @@ function formatUpstreamProtocols(section) {
 		dot: 'DoT',
 		doh: 'DoH'
 	};
+	var paths = {
+		udp: 'M4 8h14m-4-4 4 4-4 4M6 16h8',
+		tcp: 'M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4',
+		dot: 'M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5zM12 14v3',
+		doh: 'M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5zM12 14v3'
+	};
 
-	section.querySelectorAll('tbody tr.cbi-section-table-row:not(.updns-runtime-upstream)').forEach(function(row) {
+	if (!document.getElementById('updns-protocol-styles')) {
+		document.head.appendChild(E('style', { 'id': 'updns-protocol-styles' }, [
+			'.updns-protocol{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid;border-radius:999px;font-size:12px;font-weight:600;line-height:1.4;white-space:nowrap;vertical-align:middle}',
+			'.updns-protocol svg{width:14px;height:14px;flex:none}',
+			'.updns-protocol-udp{background:rgba(217,119,6,.10);color:#b45309;border-color:rgba(217,119,6,.26)}',
+			'.updns-protocol-tcp{background:rgba(22,163,74,.10);color:#15803d;border-color:rgba(22,163,74,.26)}',
+			'.updns-protocol-dot{background:#e8f5fb;color:#075985;border-color:#8ecae6}',
+			'.updns-protocol-doh{background:rgba(37,99,235,.10);color:#2563eb;border-color:rgba(37,99,235,.26)}'
+		].join('')));
+	}
+
+	section.querySelectorAll('th[data-sortable-row]').forEach(function(header) {
+		header.removeAttribute('data-sortable-row');
+	});
+
+	section.querySelectorAll('tbody tr.cbi-section-table-row').forEach(function(row) {
 		var cell = row.cells[2];
 		var protocol = cell && String(cell.textContent).trim().toLowerCase();
-		if (labels[protocol])
-			cell.textContent = labels[protocol];
+		if (!labels[protocol])
+			return;
+
+		var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		var attributes = {
+			viewBox: '0 0 24 24',
+			fill: 'none',
+			stroke: 'currentColor',
+			'stroke-width': '1.7',
+			'stroke-linecap': 'round',
+			'stroke-linejoin': 'round',
+			'aria-hidden': 'true',
+			focusable: 'false'
+		};
+		Object.keys(attributes).forEach(function(name) {
+			svg.setAttribute(name, attributes[name]);
+		});
+		var path = document.createElementNS(svg.namespaceURI, 'path');
+		path.setAttribute('d', paths[protocol]);
+		svg.appendChild(path);
+
+		cell.textContent = '';
+		cell.appendChild(E('span', { 'class': 'updns-protocol updns-protocol-' + protocol }, [
+			svg, labels[protocol]
+		]));
 	});
 }
 
@@ -570,6 +649,9 @@ function arrangeTabbedMap(node, data, localResolvers) {
 	addStatusStyles();
 	addRuntimeUpstreamRows(sections[1], localResolvers);
 	formatUpstreamProtocols(sections[1]);
+	sections[1].querySelectorAll('thead tr.cbi-section-table-descr').forEach(function(row) {
+		row.classList.add('hidden');
+	});
 
 	var tabGroup = E('div', { 'class': 'cbi-map-tabbed' });
 	var panes = E('div', { 'class': 'cbi-map-tabbed-content' });
@@ -719,6 +801,15 @@ return view.extend({
 		s = m.section(form.GridSection, 'upstream', _('Upstream DNS'));
 		s.addremove = true;
 		s.anonymous = true;
+		s.sortable = true;
+		var handleUpstreamTouchMove = s.handleTouchMove;
+		s.handleTouchMove = function() {
+			var result = handleUpstreamTouchMove.apply(this, arguments);
+			this.map.root.querySelectorAll('.updns-runtime-upstream').forEach(function(row) {
+				row.classList.remove('drag-over-above', 'drag-over-below');
+			});
+			return result;
+		};
 		s.description = localResolvers.length
 			? _('Nameservers automatically loaded from the local resolver file: %s').format(
 				localResolvers.map(function(upstream) {

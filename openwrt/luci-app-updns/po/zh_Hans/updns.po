@@ -85,6 +85,9 @@ msgstr "从本地解析文件自动加载的 nameserver：%s"
 msgid "Could not read the local resolver file: %s"
 msgstr "无法读取本地解析文件：%s"
 
+msgid "Automatically generated; cannot be edited, deleted, or reordered."
+msgstr "自动生成；不可编辑、删除或调整顺序。"
+
 msgid "Local resolver nameservers are added here automatically when enabled and available."
 msgstr "启用本地解析文件且文件可用时，其中的 nameserver 会自动添加到上游 DNS 列表。"
 

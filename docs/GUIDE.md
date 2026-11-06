@@ -186,7 +186,7 @@ config rule 'example_rule'
 |---|---|---|
 | 运行状态 | 服务状态、缓存状态文件 | 展示服务状态和缓存条目数，并定期刷新 |
 | 设置及端口 | `updns.general`：`enabled`、`port`、`use_local_resolv`、`local_resolv_file`、`query_strategy` | 启停服务、监听端口、本地 resolver 和上游 DNS 选择策略 |
-| 上游 DNS | `updns.upstream`：`name`、`address`、`protocol`、`timeout` | 管理 UDP/TCP/DoT/DoH 上游 |
+| 上游 DNS | `updns.upstream`：`name`、`address`、`protocol`、`timeout` | 管理 UDP/TCP/DoT/DoH 上游；可拖动调整自定义上游顺序，本地 resolver 自动生成项固定在顶部且不可编辑、删除或拖动 |
 | 域名列表 | `updns.domainlist`：`name`、`file` | 上传或管理列表文件，供规则引用 |
 | 缓存 | `updns.general`：`cache_enabled`、`cache_size`、`active_preload` | 控制缓存、容量和主动预取 |
 | 日志 | `updns.general`：`log_query`、`log_level` | 控制查询日志和日志级别 |
@@ -209,7 +209,11 @@ config rule 'example_rule'
 | 后端默认 UCI 配置 | [`updns`](../openwrt/updns/root/etc/config/updns) |
 | 包元数据和依赖 | [`openwrt/luci-app-updns/Makefile`](../openwrt/luci-app-updns/Makefile)、[`openwrt/updns/Makefile`](../openwrt/updns/Makefile) |
 
-页面从 UCI 读取和保存配置；本地 resolver 项会显示为自动生成的 `local-resolv-N` 上游。服务状态来自 rpcd `service.list`，缓存条目数来自 `/tmp/updns_cache_size`，nftables 集合由页面调用 `nft -j list sets` 获取。域名列表通过 rpcd 文件接口读写。
+页面从 UCI 读取和保存配置；本地 resolver 项会显示为自动生成的 `local-resolv-N` 上游。全局上游顺序用于未命中规则时的默认上游顺序；规则显式选择的上游仍按规则自身列表排序。服务状态来自 rpcd `service.list`，缓存条目数来自 `/tmp/updns_cache_size`，nftables 集合由页面调用 `nft -j list sets` 获取。域名列表通过 rpcd 文件接口读写。
+
+自动生成上游与自定义上游使用一致的表格列和右侧拖动、编辑、删除控件；自动生成项的三个控件全部禁用，悬停提示其由系统自动生成。
+上游列表保留列标题，仅隐藏列说明行；编辑弹窗仍保留字段标题和帮助说明。列表上方仅显示本地 resolver 的自动加载信息或读取错误，不显示拖动排序说明。
+协议列使用线条图标和胶囊标签：UDP 琥珀色、TCP 绿色、DoH 宝蓝色、DoT 深海蓝文字配浅蓝背景。协议文字始终保留，不仅依靠颜色区分；图标为内嵌 SVG，不依赖外部资源。自动生成项与自定义项样式一致，协议配置值和编辑下拉框不变。
 
 修改页面时应同步检查相关 UCI 字段、rpcd ACL 和后端行为。ACL 采用明确的文件路径授权；增加新的状态文件、文件读写路径或系统命令时，需要一并更新 ACL。可见文本使用 `_()` 并同步维护 PO 翻译。若调整表单区域或 Tab 布局，需检查页面中的映射和排序逻辑。
 
