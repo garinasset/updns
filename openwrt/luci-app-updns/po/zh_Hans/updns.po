@@ -1,6 +1,6 @@
 msgid ""
 msgstr ""
-"Project-Id-Version: UpDNS 1.0.34\n"
+"Project-Id-Version: UpDNS 1.0.35\n"
 "PO-Revision-Date: 2026-11-06 16:53+0800\n"
 "Last-Translator: UpDNS contributors\n"
 "Language-Team: Simplified Chinese\n"

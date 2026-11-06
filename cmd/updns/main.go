@@ -17,6 +17,7 @@ import (
 	"github.com/garinasset/updns/logging"
 	"github.com/garinasset/updns/server"
 	"github.com/miekg/dns"
+	"github.com/rivo/uniseg"
 	"golang.org/x/sys/unix"
 )
 
@@ -297,15 +298,14 @@ func fatalf(format string, args ...any) {
 const (
 	queryFieldWidth = 12
 	boxMinWidth     = 48
-	boxMaxWidth     = 80
 	boxPrefix       = "│  "
 	boxTitle        = "updns"
 )
 
-// boxWidth is the total width of the output frame, set per render.
-var boxWidth = boxMinWidth
-
 func terminalWidth(out io.Writer) int {
+	if w, ok := out.(*layoutWriter); ok {
+		return w.width
+	}
 	if f, ok := out.(*os.File); ok {
 		if ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 {
 			return int(ws.Col)
@@ -318,28 +318,31 @@ func terminalWidth(out io.Writer) int {
 }
 
 func adaptiveBoxWidth(out io.Writer) int {
-	width := terminalWidth(out)
-	if width > boxMaxWidth {
-		width = boxMaxWidth
-	}
-	if width < boxMinWidth {
-		width = boxMinWidth
-	}
-	return width
+	return terminalWidth(out)
 }
 
 func writeBoxTop(out io.Writer) {
+	boxWidth := terminalWidth(out)
 	head := "╭─ " + boxTitle + " "
+	if boxWidth < len([]rune(head))+1 {
+		fmt.Fprintln(out, strings.Repeat("─", boxWidth))
+		return
+	}
 	fmt.Fprintf(out, "%s%s╮\n", head, strings.Repeat("─", boxWidth-len([]rune(head))-1))
 }
 
 func writeBoxBottom(out io.Writer) {
+	boxWidth := terminalWidth(out)
+	if boxWidth < 2 {
+		fmt.Fprintln(out, "─")
+		return
+	}
 	fmt.Fprintf(out, "╰%s╯\n", strings.Repeat("─", boxWidth-2))
 }
 
 func writeQueryOutput(out io.Writer, results []*server.QueryResult) {
 	domain := results[0].Domain
-	boxWidth = adaptiveBoxWidth(out)
+	out = &layoutWriter{Writer: out, width: adaptiveBoxWidth(out)}
 
 	fmt.Fprintln(out)
 	writeBoxTop(out)
@@ -398,7 +401,7 @@ func writeQueryOutput(out io.Writer, results []*server.QueryResult) {
 		fmt.Fprintf(out, "%s(none)\n", boxPrefix)
 	} else {
 		for _, answer := range answers {
-			fmt.Fprintf(out, "%s• %s\n", boxPrefix, answer)
+			fmt.Fprintf(out, "%s• %s\n", boxPrefix, cleanText(answer))
 		}
 	}
 	fmt.Fprintln(out, "│")
@@ -407,11 +410,12 @@ func writeQueryOutput(out io.Writer, results []*server.QueryResult) {
 }
 
 func writeSection(out io.Writer, title string) {
-	fmt.Fprintf(out, "│\n%s%s\n%s%s\n", boxPrefix, title, boxPrefix, strings.Repeat("─", boxWidth-6))
+	fmt.Fprintf(out, "│\n%s%s\n%s%s\n", boxPrefix, title, boxPrefix, strings.Repeat("─", max(0, terminalWidth(out)-6)))
 }
 
 func writeField(out io.Writer, label, value string) {
-	fmt.Fprintf(out, "%s%-*s : %s\n", boxPrefix, queryFieldWidth, label, value)
+	label = cleanText(label)
+	fmt.Fprintf(out, "%s%s%s : %s\n", boxPrefix, label, strings.Repeat(" ", max(0, queryFieldWidth-uniseg.StringWidth(label))), cleanText(value))
 }
 
 func writeNFTField(out io.Writer, label string, sets []string, membership map[string]bool, hasAnswers *bool, addressFamily string) {
@@ -433,7 +437,7 @@ func writeNFTField(out io.Writer, label string, sets []string, membership map[st
 		detail := ""
 		contains, doesNotContain := "Contains", "Does not contain"
 		if len(sets) > 1 {
-			detail = setName + " "
+			detail = cleanText(setName) + " "
 			contains, doesNotContain = "contains", "does not contain"
 		}
 		if membership[setName] {

@@ -69,7 +69,7 @@ func TestWriteQueryOutputFormatsAlignedFields(t *testing.T) {
 		"│  DOMAIN",
 		"│  Domain       : example.com.",
 		"│  Query Type   : A / AAAA",
-		"│  Query Path   : A=Upstream Query / AAAA=Cache Hit",
+		"│  Query Path   : A=Upstream Query / AAAA=Cache \n│                 Hit",
 		"│  Matched Rule : example",
 		"│  Action       : IPv4 + IPv6",
 		"│  Response     : NOERROR",

@@ -4,6 +4,7 @@ go 1.21
 
 require (
 	github.com/miekg/dns v1.1.56
+	github.com/rivo/uniseg v0.4.7
 	golang.org/x/sys v0.13.0
 )
 

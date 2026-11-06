@@ -265,7 +265,9 @@ root@OpenWrt:~# updns google.com
 
 `Query Path` 的 `Local Answer` 表示直接来自本地 hosts/DHCP；`Cache Hit` 表示有效缓存；`Prefetch Hit` 表示等待并复用预取任务；`Upstream Query` 表示前台解析。`Upstream` 在本地答复时显示 `local-hosts` 或 `local-dhcp`。
 
-查询失败时仍会输出完整报告：`Response` 显示 `ERROR`，并新增 `ERRORS` 分区，按查询类型给出一行规范化的简短原因（如 `Upstream timeout`、`Upstream connection refused`、`Upstream host unresolvable`、`Network not ready`、`No upstream configured`、`All upstreams failed`），命令以非 0 退出码结束。仅 A 或 AAAA 之一失败时，另一类结果照常显示，只要有一类成功退出码即为 0。边框宽度自适应终端宽度（最小 48、最大 80 列）。
+查询失败时仍会输出完整报告：`Response` 显示 `ERROR`，并新增 `ERRORS` 分区，按查询类型给出规范化的简短原因（如 `Upstream timeout`、`Upstream connection refused`、`Upstream host unresolvable`、`Network not ready`、`No upstream configured`、`All upstreams failed`），命令以非 0 退出码结束。仅 A 或 AAAA 之一失败时，另一类结果照常显示，只要有一类成功退出码即为 0。
+
+边框使用终端实际列数，不限制最小或最大宽度；无法读取终端尺寸时使用 `COLUMNS`，仍不可用则使用 48 列。文本按 Unicode 显示宽度对齐、按完整字素换行，长值续行对齐值起点；窄终端改为字段名和值分行。极窄终端会缩减缩进，无法容纳的双列字素显示为 `?`。动态文本中的 ANSI 颜色/链接转义被移除，控制字符替换为空格。部分终端对 emoji 和歧义宽度字符的显示仍可能不同。
 
 ## 服务管理
 
