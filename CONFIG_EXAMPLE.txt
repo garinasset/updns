@@ -37,6 +37,15 @@ config domainlist
 	option name 'example-domains'
 	option file '/etc/updns/domainlists/example.txt'
 
+
+# Supported actions: ipv4+ipv6, ipv4only, ipv6only, nxdomain, zeroip.
+# nxdomain returns NXDOMAIN; zeroip (Zero-IP Blocking) returns 0.0.0.0 for A and :: for AAAA.
+# Neither queries upstreams or writes nftsets; both responses are cached.
+# Rules are evaluated in file order; LuCI drag-and-drop updates this order.
+# A single rule may set domain_match=0 to act as the final fallback, regardless of row order.
+# Set add_upstream_ips=1 to add the selected upstream endpoint IPs to these nftsets.
+# With no matching rule and no fallback rule, default upstream behavior is used.
+# A bare nftables set name still refers to inet/fw4 for backward compatibility.
 config rule
 	option name 'example_rule'
 	option domain_match '1'
@@ -47,11 +56,3 @@ config rule
 	option add_upstream_ips '0'
 	option action 'ipv4+ipv6'
 
-# Supported actions: ipv4+ipv6, ipv4only, ipv6only, nxdomain, zeroip.
-# nxdomain returns NXDOMAIN; zeroip (Zero-IP Blocking) returns 0.0.0.0 for A and :: for AAAA.
-# Neither queries upstreams or writes nftsets; both responses are cached.
-# Rules are evaluated in file order; LuCI drag-and-drop updates this order.
-# A single rule may set domain_match=0 to act as the final fallback, regardless of row order.
-# Set add_upstream_ips=1 to add the selected upstream endpoint IPs to these nftsets.
-# With no matching rule and no fallback rule, default upstream behavior is used.
-# A bare nftables set name still refers to inet/fw4 for backward compatibility.
