@@ -279,6 +279,9 @@ func loadConfig() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if *verbose {
+		cfg.LogLevel = "debug"
+	}
 	if err := logging.SetLevel(cfg.LogLevel); err != nil {
 		return nil, err
 	}
@@ -354,13 +357,7 @@ func writeQueryOutput(out io.Writer, results []*server.QueryResult) {
 
 	writeSection(out, "DNS RESULT")
 	writeField(out, "Matched Rule", matchedRule(results))
-	upstream := joinedUnique(results, func(result *server.QueryResult) string {
-		return result.UsedUpstream
-	})
-	if upstream == "" {
-		upstream = "(none)"
-	}
-	writeField(out, "Upstream", upstream)
+	writeField(out, "Upstream", upstreamByType(results))
 	writeField(out, "Action", displayAction(results[0].Action))
 	writeField(out, "Response", responseCode(results))
 
@@ -468,6 +465,7 @@ func queryPath(results []*server.QueryResult) string {
 		path := result.Path()
 		paths = append(paths, result.QueryType+"="+path)
 	}
+
 	if len(paths) == 0 {
 		return "Unavailable"
 	}
@@ -478,6 +476,21 @@ func queryPath(results []*server.QueryResult) string {
 		}
 	}
 	return first
+}
+
+func upstreamByType(results []*server.QueryResult) string {
+	values := make([]string, 0, len(results))
+	for _, result := range results {
+		name := result.UsedUpstream
+		if name == "" {
+			name = "(none)"
+		}
+		values = append(values, result.QueryType+"="+name)
+	}
+	if len(values) == 0 {
+		return "(none)"
+	}
+	return strings.Join(values, " / ")
 }
 
 func matchedRule(results []*server.QueryResult) string {

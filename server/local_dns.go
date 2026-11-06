@@ -259,10 +259,15 @@ func (l *localDNS) lookup(domain string, queryType uint16) (*dns.Msg, string, er
 	now := l.now()
 	var active []localRecord
 	haveHosts := false
+	haveIPv4Hosts, haveIPv6Hosts := false, false
 	for _, record := range records {
 		if record.expires.IsZero() || now.Before(record.expires) {
 			active = append(active, record)
 			haveHosts = haveHosts || !record.lease
+			if !record.lease {
+				haveIPv4Hosts = haveIPv4Hosts || record.address.Is4()
+				haveIPv6Hosts = haveIPv6Hosts || record.address.Is6()
+			}
 		}
 	}
 	if len(active) == 0 {
@@ -272,13 +277,18 @@ func (l *localDNS) lookup(domain string, queryType uint16) (*dns.Msg, string, er
 	response.SetQuestion(domain, queryType)
 	response.Response = true
 	source := "local-dhcp"
+	if haveHosts {
+		source = "local-hosts"
+	}
+	usedHosts, usedDHCP := false, false
 	seen := make(map[string]bool)
 	for _, record := range active {
-		if haveHosts && record.lease {
-			continue
-		}
-		if haveHosts {
-			source = "local-hosts"
+		// Hosts override leases for the same address family, not the whole name.
+		if record.lease {
+			if queryType == dns.TypePTR && haveHosts ||
+				queryType != dns.TypePTR && (record.address.Is4() && haveIPv4Hosts || record.address.Is6() && haveIPv6Hosts) {
+				continue
+			}
 		}
 		var rr dns.RR
 		header := dns.RR_Header{Name: domain, Class: dns.ClassINET}
@@ -296,7 +306,17 @@ func (l *localDNS) lookup(domain string, queryType uint16) (*dns.Msg, string, er
 		if rr != nil && !seen[rr.String()] {
 			seen[rr.String()] = true
 			response.Answer = append(response.Answer, rr)
+			usedHosts = usedHosts || !record.lease
+			usedDHCP = usedDHCP || record.lease
 		}
+	}
+	switch {
+	case usedHosts && usedDHCP:
+		source = "local-hosts+local-dhcp"
+	case usedHosts:
+		source = "local-hosts"
+	case usedDHCP:
+		source = "local-dhcp"
 	}
 	return response, source, nil
 }

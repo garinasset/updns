@@ -83,19 +83,19 @@ HTTPS/SVCB 处理规则：
 
 UpDNS 直接读取 `/etc/hosts`、`/tmp/hosts/` 下的 hosts 文件和 DHCP 租约，支持 A、AAAA、PTR 和 ANY。本地域名及路径取自 `/etc/config/dhcp` 的第一个 dnsmasq 配置段：`domain`、`expandhosts`、`leasefile`、`addnhosts` 和 `hostsdir`；也读取 odhcpd 的 `hostsdir`。无 OpenWrt DHCP 配置时，默认租约路径为 `/tmp/dhcp.leases`、域名后缀为 `lan`，不自动扩展 hosts 短名称。
 
-本地记录优先于旧的上游缓存，hosts 优先于同名 DHCP 租约；租约到期不再使用。文件、目录和本地域名设置在查询时检测更新，解析结果使用 TTL 0，不写入 DNS 缓存、不做周期预取；日志和 CLI 显示 `Local Answer`。本地记录不绕过 NXDOMAIN/Zero-IP 拦截，也遵守地址族过滤和 nftset 规则。本地数据文件无法读取或解析时记录限频告警，并继续使用缓存和上游解析。`use_local_resolv` 只控制从 resolv.conf 导入上游地址，与本地记录解析无关。
+本地记录优先于旧的上游缓存，hosts 仅覆盖同名、同地址族的 DHCP 租约：例如 hosts 提供 IPv6 时，仍可使用 DHCP 的 IPv4；租约到期不再使用。文件、目录和本地域名设置在查询时检测更新，解析结果使用 TTL 0，不写入 DNS 缓存、不做周期预取；日志和 CLI 显示 `Local Answer`。本地记录不绕过 NXDOMAIN/Zero-IP 拦截，也遵守地址族过滤和 nftset 规则。本地数据文件无法读取或解析时记录限频告警，并继续使用缓存和上游解析。`use_local_resolv` 只控制从 resolv.conf 导入上游地址，与本地记录解析无关。
 
 ### 上游 DNS 选择策略
 
 `query_strategy` 仅接受 `0`、`1`、`2`，默认 `0`；不兼容原单词配置值：
 
-- **动态调度（0）**：同一个有序上游组首次并发选取能响应的上游，后续通常只查询该上游。完成 50 次单上游选择后，或距离上次重评达到 20 秒，在下一次初始解析时重新并发评估；没有独立后台探测。原上游传输失败或响应无效时重新选择。名称表示自适应优选，不保证始终延迟最低。
+- **动态调度（0）**：同一个有序上游组初始上游平权并发查询，首个有效最终响应胜出，记录赢家自身请求耗时 `t`。后续通常只查询该上游；等待达到 `min(2t, 该上游配置超时)` 时，保留原请求并同时追加其他上游，所有在途请求中首个有效完成者胜出。原上游提前传输失败或响应无效时立即追加其他上游。只有竞速胜出才更新优选及 `t`，普通单上游成功不更新。追加上游的耗时从自身请求启动计算，不包含之前的等待；原优选仍有先启动优势。没有固定次数、定时重评或独立后台探测；原优选持续正常时不会主动发现其他上游变快，不保证始终延迟最低。
 - **严格顺序（1）**：按引用顺序逐个尝试，直到获得有效最终响应。
 - **并发查询（2）**：并发请求所选上游，以首个有效最终响应胜出，取消其他在途请求。
 
-三种策略统一适用于 UDP/TCP/DoT/DoH，保留本项目各上游超时、CNAME 补查和取消机制。动态调度借鉴 [dnsmasq 官方手册](https://thekelleys.org.uk/dnsmasq/docs/dnsmasq-man.html)及其 [2.93 发布版](https://thekelleys.org.uk/dnsmasq/dnsmasq-2.93.tar.gz)的优选设计，但不照搬客户端驱动重试或协议分支差异。上游配置变化和清空缓存会重置优选状态。
+三种策略统一适用于 UDP/TCP/DoT/DoH，保留本项目各上游超时、CNAME 补查和取消机制。动态调度采用响应延迟触发的追加竞速机制。上游配置变化和清空缓存会重置优选及延迟基线状态。
 
-有效缓存直接返回，不产生上游查询。过期刷新和主动预取优先使用该条目原胜出上游，不参与常规组重评；仅当原上游不可用或响应无效时，按所选策略尝试当前组其他上游，成功后更新条目路径。规则或服务绑定发生变化时重新校验路由，不固守旧策略。没有匹配规则且没有兜底规则时，使用整个上游列表；本地 resolver 上游排在其他上游之前。
+有效缓存直接返回，不产生上游查询。过期刷新和主动预取优先使用该条目原胜出上游，不应用 `2t` 追加竞速；仅当原上游不可用、达到配置超时或响应无效时，按所选策略尝试当前组其他上游，成功后更新条目路径。规则或服务绑定发生变化时重新校验路由，不固守旧策略。没有匹配规则且没有兜底规则时，使用整个上游列表；本地 resolver 上游排在其他上游之前。
 
 三种策略遵循相同的响应判定与缓存规则：
 
@@ -242,7 +242,7 @@ root@OpenWrt:~# updns google.com
 │  DNS RESULT
 │  ──────────────────────────────────────────
 │  Matched Rule : US Access
-│  Upstream     : Google-DoH
+│  Upstream     : A=Google-DoH / AAAA=Google-DoH
 │  Action       : IPv4 + IPv6
 │  Response     : NOERROR
 │
@@ -263,7 +263,7 @@ root@OpenWrt:~# updns google.com
 
 服务运行时，CLI 通过本机控制接口查询，使用服务的规则、缓存并显示 nftables 集合信息；服务未运行时会独立查询，不使用服务缓存。查询默认分别执行 A 和 AAAA 查询。
 
-`Query Path` 的 `Local Answer` 表示直接来自本地 hosts/DHCP；`Cache Hit` 表示有效缓存；`Prefetch Hit` 表示等待并复用预取任务；`Upstream Query` 表示前台解析。`Upstream` 在本地答复时显示 `local-hosts` 或 `local-dhcp`。
+`Query Path` 的 `Local Answer` 表示直接来自本地 hosts/DHCP；`Cache Hit` 表示有效缓存；`Prefetch Hit` 表示等待并复用预取任务；`Upstream Query` 表示前台解析。`Upstream` 按类型分别显示，例如 `A=local-dhcp / AAAA=local-hosts`；无来源时显示 `(none)`。缓存命中显示缓存原来源，不表示本次访问了上游。本地 ANY 答复同时包含两种来源时显示 `local-hosts+local-dhcp`。
 
 查询失败时仍会输出完整报告：`Response` 显示 `ERROR`，并新增 `ERRORS` 分区，按查询类型给出规范化的简短原因（如 `Upstream timeout`、`Upstream connection refused`、`Upstream host unresolvable`、`Network not ready`、`No upstream configured`、`All upstreams failed`），命令以非 0 退出码结束。仅 A 或 AAAA 之一失败时，另一类结果照常显示，只要有一类成功退出码即为 0。
 

@@ -14,7 +14,7 @@ type layoutWriter struct {
 	width int
 }
 
-var terminalEscape = regexp.MustCompile("\\x1b\\[[0-?]*[ -/]*[@-~]|\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)")
+var terminalEscape = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
 
 func cleanText(text string) string {
 	return strings.Map(func(r rune) rune {

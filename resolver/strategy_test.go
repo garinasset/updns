@@ -10,7 +10,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-func TestOptimalReusesWinnerAndReevaluatesExactThresholds(t *testing.T) {
+func TestOptimalReusesWinnerWithoutPeriodicReevaluation(t *testing.T) {
 	var slowCalls, fastCalls atomic.Int32
 	slow := startDNSUpstream(t, "udp", "127.0.0.1:0", func(w dns.ResponseWriter, query *dns.Msg) {
 		slowCalls.Add(1)
@@ -19,6 +19,7 @@ func TestOptimalReusesWinnerAndReevaluatesExactThresholds(t *testing.T) {
 	})
 	fast := startDNSUpstream(t, "udp", "127.0.0.1:0", func(w dns.ResponseWriter, query *dns.Msg) {
 		fastCalls.Add(1)
+		time.Sleep(5 * time.Millisecond)
 		_ = w.WriteMsg(testAnswer(query))
 	})
 	r := NewResolver(0)
@@ -39,43 +40,26 @@ func TestOptimalReusesWinnerAndReevaluatesExactThresholds(t *testing.T) {
 		}
 	}
 	query()
-	for i := 0; i < selectionQueries; i++ {
-		query()
-	}
 	r.selectionMu.Lock()
 	state := r.selections[selectionKey(names)]
-	if state.queries != 50 {
-		t.Fatalf("expected exactly 50 single-upstream selections, got %d", state.queries)
-	}
+	// Use a generous baseline so OS scheduling jitter cannot trigger a race.
+	state.latency = 200 * time.Millisecond
 	r.selectionMu.Unlock()
+	for i := 0; i < 55; i++ {
+		query()
+	}
+	now = now.Add(time.Minute)
 	query()
 	r.selectionMu.Lock()
-	count := state.queries
+	baseline := state.latency
 	r.selectionMu.Unlock()
-	if count != 0 {
-		t.Fatal("query threshold did not trigger reevaluation")
+	if baseline != 200*time.Millisecond {
+		t.Fatal("ordinary success changed the race baseline")
 	}
-	now = now.Add(selectionInterval - time.Nanosecond)
-	query()
-	r.selectionMu.Lock()
-	count = state.queries
-	r.selectionMu.Unlock()
-	if count != 1 {
-		t.Fatal("reevaluated before 20 seconds elapsed")
-	}
-	now = now.Add(time.Nanosecond)
-	query()
-	r.selectionMu.Lock()
-	count = state.queries
-	r.selectionMu.Unlock()
-	if count != 0 {
-		t.Fatal("20-second boundary did not trigger reevaluation")
-	}
-	if fastCalls.Load() != 54 {
+	if fastCalls.Load() != 57 {
 		t.Fatalf("unexpected upstream request count: %d", fastCalls.Load())
 	}
-	// Canceled UDP requests may not reach a remote server, so test dispatch via state above.
-	if slowCalls.Load() > 3 {
+	if slowCalls.Load() > 1 {
 		t.Fatalf("preferred requests were broadcast: %d slow queries", slowCalls.Load())
 	}
 }

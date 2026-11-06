@@ -78,19 +78,19 @@ HTTPS/SVCB handling:
 
 UpDNS reads `/etc/hosts`, hosts files under `/tmp/hosts/`, and DHCP leases directly, supporting A, AAAA, PTR and ANY. The first dnsmasq section of `/etc/config/dhcp` supplies `domain`, `expandhosts`, `leasefile`, `addnhosts` and `hostsdir`; odhcpd's `hostsdir` is also included. Without OpenWrt DHCP configuration, the lease path defaults to `/tmp/dhcp.leases`, the domain to `lan`, and hosts short names are not expanded.
 
-Local records override older upstream cache entries; hosts take precedence over same-name DHCP leases. Expired leases are not served. Queries detect file/directory/configuration updates. Local replies have TTL 0, are not DNS-cached or periodically preloaded, and are shown as `Local Answer` with source `local-hosts` or `local-dhcp`. Blocking, address-family filtering and nftset rules still apply. If local data cannot be read or parsed, a rate-limited warning is logged and cache/upstream resolution continues. `use_local_resolv` controls upstream nameserver import only, not local records.
+Local records override older upstream cache entries; hosts take precedence over DHCP leases only for the same name and address family. For example, IPv6 hosts records do not suppress IPv4 DHCP leases. Expired leases are not served. Queries detect file/directory/configuration updates. Local replies have TTL 0, are not DNS-cached or periodically preloaded, and are shown as `Local Answer` with source `local-hosts` or `local-dhcp` (`local-hosts+local-dhcp` for mixed-source ANY replies). Blocking, address-family filtering and nftset rules still apply. If local data cannot be read or parsed, a rate-limited warning is logged and cache/upstream resolution continues. `use_local_resolv` controls upstream nameserver import only, not local records.
 
 ### Upstream DNS Selection Strategy
 
 `query_strategy` accepts only `0`, `1`, or `2` and defaults to `0`; the former word-based values are not supported:
 
-- **Dynamic Scheduling (`0`)**: initially race the ordered upstream group, then normally reuse a responsive winner. After 50 single-upstream selections or 20 seconds since the previous evaluation, the next initial query reevaluates the group. There are no standalone background probes. Transport/invalid-response failures trigger reselection; this does not guarantee minimum latency.
+- **Dynamic Scheduling (`0`)**: initially query all members of the ordered upstream group equally and use the first valid final response, recording the winner's own request duration `t`. Normally query only that winner afterward. At `min(2t, its configured timeout)`, retain the original request and concurrently add the other upstreams; the first valid completion among all in-flight requests wins. An earlier transport or invalid-response failure immediately starts the other upstreams. Only a race win updates the selection and `t`; ordinary single-upstream success does not. Added upstream durations exclude the earlier wait, but the original upstream retains its head-start advantage. There are no query-count thresholds, periodic reevaluations, or standalone probes. Faster alternatives are not discovered while the preferred upstream remains responsive; minimum latency is not guaranteed.
 - **Strict Order (`1`)**: try referenced upstreams in order until a valid final response arrives.
 - **Concurrent Query (`2`)**: query selected upstreams concurrently and cancel remaining requests after the first valid final response.
 
-All three strategies support UDP/TCP/DoT/DoH and retain per-upstream timeouts, CNAME completion and cancellation. Optimal selection borrows the design described in the [dnsmasq manual](https://thekelleys.org.uk/dnsmasq/docs/dnsmasq-man.html) and [2.93 release](https://thekelleys.org.uk/dnsmasq/dnsmasq-2.93.tar.gz), without copying client-driven retries or protocol-specific differences. Upstream changes and explicit cache clear reset selection state.
+All three strategies support UDP/TCP/DoT/DoH and retain per-upstream timeouts, CNAME completion and cancellation. Dynamic Scheduling uses latency-triggered hedged requests. Upstream changes and explicit cache clear reset selection and latency baseline state.
 
-Valid cache hits do not query upstreams. Expired refreshes and preloads first reuse the entry's original winning upstream, bypassing normal group reevaluation. Only transport or invalid-response failures try the other current upstreams according to the selected strategy and update the cached path. Rule/service-binding changes revalidate routing rather than freezing an obsolete policy. Without a matching/fallback rule, use the complete upstream list, with local resolver upstreams first.
+Valid cache hits do not query upstreams. Expired refreshes and preloads first reuse the entry's original winning upstream without `2t` hedging. Only transport failures, configured timeouts, or invalid responses try the other current upstreams according to the selected strategy and update the cached path. Rule/service-binding changes revalidate routing rather than freezing an obsolete policy. Without a matching/fallback rule, use the complete upstream list, with local resolver upstreams first.
 
 All strategies follow the same response and caching rules:
 
@@ -231,7 +231,7 @@ root@OpenWrt:~# updns google.com
 │  DNS RESULT
 │  ──────────────────────────────────────────
 │  Matched Rule : US Access
-│  Upstream     : Google-DoH
+│  Upstream     : A=Google-DoH / AAAA=Google-DoH
 │  Action       : IPv4 + IPv6
 │  Response     : NOERROR
 │
@@ -253,6 +253,8 @@ root@OpenWrt:~# updns google.com
 When the service is running, the CLI queries through the local control interface, using the service's rules and cache and showing nftables set information; when the service is not running, it queries independently without the service cache. By default it performs A and AAAA queries separately.
 
 When a query fails the full report is still printed: `Response` shows `ERROR` and an `ERRORS` section gives a normalized short reason per query type (for example `Upstream timeout`, `Upstream connection refused`, `Upstream host unresolvable`, `Network not ready`, `No upstream configured`, `All upstreams failed`), and the command exits non-zero. If only one of A/AAAA fails, the other result is shown normally and the exit code is 0 as long as one succeeds.
+
+`Upstream` shows each query type separately, for example `A=local-dhcp / AAAA=local-hosts`; missing sources appear as `(none)`. Cache hits show the original cached source, not a server contacted by this request.
 
 The frame uses the actual terminal column count without minimum or maximum limits, falling back to `COLUMNS`, then 48 columns if unavailable. Text is aligned by Unicode display width and wrapped at grapheme boundaries. Long values continue at the value column; narrow terminals place labels and values on separate lines. Extremely narrow terminals reduce indentation and replace double-column graphemes that cannot fit with `?`. ANSI color/link escapes are removed from dynamic text and control characters become spaces. Some terminals may still render emoji and ambiguous-width characters differently.
 

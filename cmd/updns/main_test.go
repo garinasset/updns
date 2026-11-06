@@ -73,7 +73,7 @@ func TestWriteQueryOutputFormatsAlignedFields(t *testing.T) {
 		"│  Matched Rule : example",
 		"│  Action       : IPv4 + IPv6",
 		"│  Response     : NOERROR",
-		"│  Upstream     : Cloudflare-DoH",
+		"│  Upstream     : A=Cloudflare-DoH / AAAA=(none)",
 		"│  IPv4         : inet/fw4/example4",
 		"│                 ✓ Contains resolved IPv4",
 		"│  IPv6         : inet/fw4/example6",

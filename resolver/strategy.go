@@ -12,13 +12,9 @@ import (
 	"github.com/miekg/dns"
 )
 
-const selectionQueries = 50
-const selectionInterval = 20 * time.Second
-
 type selection struct {
 	preferred string
-	queries   int
-	tested    time.Time
+	latency   time.Duration
 	revision  uint64
 }
 
@@ -107,46 +103,123 @@ func (r *Resolver) resolveOptimal(ctx context.Context, domain string, queryType 
 	}
 	epoch := r.selectionEpoch
 	revision := state.revision
-	now := r.now()
-	retest := state.preferred == "" || state.queries >= selectionQueries || now.Sub(state.tested) >= selectionInterval
 	preferred := state.preferred
-	if retest {
-		state.queries = 0
-		state.tested = now
-	} else {
-		state.queries++
-	}
+	latency := state.latency
 	r.selectionMu.Unlock()
 
-	var response *dns.Msg
-	var winner string
-	var err error
-	if retest {
-		response, winner, err = r.ResolveConcurrent(ctx, domain, queryType, names)
-	} else {
-		response, err = r.Resolve(ctx, domain, queryType, preferred)
-		winner = preferred
-		if err != nil && ctx.Err() == nil {
-			firstResponse, firstErr := response, err
-			response, winner, err = r.ResolveConcurrent(ctx, domain, queryType, otherUpstreams(names, preferred))
-			if err != nil && ctx.Err() == nil {
-				err = allUpstreamsFailed(domain, []string{upstreamFailure(preferred, firstResponse, firstErr), err.Error()},
-					notReady(preferred, firstErr) && errors.Is(err, ErrNetworkNotReady))
-			}
+	var delay time.Duration
+	if preferred != "" {
+		r.mu.RLock()
+		upstream := r.upstreams[preferred]
+		if upstream != nil {
+			delay = time.Duration(upstream.Timeout) * time.Second
 		}
+		r.mu.RUnlock()
+		delay = selectionDelay(latency, delay)
 	}
+	response, winner, elapsed, competed, err := r.resolveTimed(ctx, domain, queryType, names, preferred, delay)
 	if ctx.Err() != nil {
 		return nil, "", ctx.Err()
 	}
 	r.selectionMu.Lock()
 	if epoch == r.selectionEpoch && r.selections[key] == state {
 		if err == nil {
-			state.preferred = winner
+			if competed {
+				state.preferred = winner
+				state.latency = elapsed
+			}
 			state.revision++
-		} else if state.revision == revision {
+		} else if err != nil && state.revision == revision {
 			state.preferred = ""
 		}
 	}
 	r.selectionMu.Unlock()
 	return response, winner, err
+}
+
+func selectionDelay(latency, timeout time.Duration) time.Duration {
+	// Compare before doubling to avoid duration overflow.
+	if latency > 0 && latency < timeout/2 {
+		return 2 * latency
+	}
+	return timeout
+}
+
+// resolveTimed retains the original request when the delay triggers hedging.
+// Each response carries latency measured from its own upstream request start.
+func (r *Resolver) resolveTimed(ctx context.Context, domain string, queryType uint16, names []string, preferred string, delay time.Duration) (*dns.Msg, string, time.Duration, bool, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type answer struct {
+		response *dns.Msg
+		name     string
+		elapsed  time.Duration
+		err      error
+	}
+	answers := make(chan answer, len(names))
+	pending := 0
+	launch := func(group []string) {
+		for _, name := range group {
+			pending++
+			go func(name string) {
+				start := time.Now()
+				response, err := r.Resolve(ctx, domain, queryType, name)
+				answers <- answer{response, name, time.Since(start), err}
+			}(name)
+		}
+	}
+	competed := preferred == ""
+	var timer *time.Timer
+	var deadline <-chan time.Time
+	if competed {
+		launch(names)
+	} else {
+		launch([]string{preferred})
+		timer = time.NewTimer(delay)
+		defer timer.Stop()
+		deadline = timer.C
+	}
+	expand := func() {
+		competed = true
+		deadline = nil
+		launch(otherUpstreams(names, preferred))
+	}
+	var failures []string
+	allNotReady := true
+	for pending > 0 {
+		select {
+		case result := <-answers:
+			pending--
+			if err := ctx.Err(); err != nil {
+				return nil, "", 0, competed, err
+			}
+			if result.err == nil {
+				return result.response, result.name, result.elapsed, competed, nil
+			}
+			failures = append(failures, upstreamFailure(result.name, result.response, result.err))
+			allNotReady = allNotReady && notReady(result.name, result.err)
+			if !competed {
+				expand()
+			}
+		case <-deadline:
+			// Prefer an already completed result over launching extra work.
+			select {
+			case result := <-answers:
+				pending--
+				if err := ctx.Err(); err != nil {
+					return nil, "", 0, competed, err
+				}
+				if result.err == nil {
+					return result.response, result.name, result.elapsed, false, nil
+				}
+				failures = append(failures, upstreamFailure(result.name, result.response, result.err))
+				allNotReady = allNotReady && notReady(result.name, result.err)
+			default:
+			}
+			expand()
+		case <-ctx.Done():
+			return nil, "", 0, competed, ctx.Err()
+		}
+	}
+	return nil, "", 0, competed, allUpstreamsFailed(domain, failures, allNotReady)
 }
