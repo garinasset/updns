@@ -51,6 +51,7 @@ type Server struct {
 	warnLimit         *warnLimiter
 	bindings          *serviceBindings
 	targetPrefetch    chan struct{}
+	local             *localDNS
 }
 
 // HTTPS/SVCB queries are optional hints that some upstreams silently drop.
@@ -112,6 +113,7 @@ type QueryResult struct {
 	Answers      []string        `json:"answers"`
 	CacheHit     bool            `json:"cache_hit"`
 	PrefetchWait bool            `json:"prefetch_wait,omitempty"`
+	LocalAnswer  bool            `json:"local_answer,omitempty"`
 	MatchedRule  string          `json:"matched_rule"`
 	Action       string          `json:"action"`
 	IPv4NFTSets  []string        `json:"ipv4_nft_sets"`
@@ -143,6 +145,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		bindings:      newServiceBindings(cfg.CacheSize),
 		// Bounds concurrent background lookups of newly bound service targets.
 		targetPrefetch: make(chan struct{}, serviceTargetPrefetch),
+		local:          newLocalDNS("/etc/config/dhcp"),
 	}
 
 	// Initialize components
@@ -461,7 +464,15 @@ func (s *Server) Query(domain string, queryType uint16) (*QueryResult, error) {
 
 // queryFrom is Query with the requesting client's address, used for logging.
 func (s *Server) queryFrom(domain string, queryType uint16, client string) (*QueryResult, error) {
+	if err := s.ctx.Err(); err != nil {
+		return nil, err
+	}
 	domain = strings.ToLower(dns.Fqdn(domain))
+	if result, found := s.queryLocal(domain, queryType); found {
+		s.discardLocalCache(domain, queryType)
+		s.applyServiceBindings(result)
+		return result, nil
+	}
 	result, err := s.queryRouted(domain, queryType, client)
 	// A binding created while this query was resolving changes its routing;
 	// resolve again so the returned addresses reach the current nftsets.
@@ -485,7 +496,7 @@ func (s *Server) queryRouted(domain string, queryType uint16, client string) (*Q
 	if s.cache != nil {
 		// An entry resolved under different routing (a service binding was
 		// added or expired) is a miss, so its addresses reach the current sets.
-		if entry, found := s.cache.Get(cacheKey); found && entry.Route == route.signature {
+		if entry, found := s.cache.GetForRoute(cacheKey, route.signature); found {
 			s.queryMu.Unlock()
 			result := s.metadataFor(domain, queryType, route)
 			result.CacheHit = true
@@ -627,16 +638,7 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 
 // FormatQueryLog renders one query log line with " | " separated columns.
 func FormatQueryLog(kind string, result *QueryResult, client, ecs string) string {
-	path := "Upstream Query"
-	if result.CacheHit {
-		path = "Cache Hit"
-	} else if result.PrefetchWait {
-		path = "Prefetch Hit"
-	} else if normalizeAction(result.Action) == "nxdomain" {
-		path = "NXDOMAIN RULE"
-	} else if normalizeAction(result.Action) == "zeroip" {
-		path = "ZERO-IP RULE"
-	}
+	path := result.Path()
 	rcode := result.Rcode
 	if result.Error != "" {
 		rcode = dns.RcodeServerFailure
@@ -786,6 +788,13 @@ func (s *Server) resolveQueryDetail(domain string, queryType uint16, client stri
 }
 
 func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, queryType uint16, client string) (*QueryResult, error) {
+	return s.resolveQueryWithUpstreamContext(ctx, domain, queryType, client, "")
+}
+
+func (s *Server) resolveQueryWithUpstreamContext(ctx context.Context, domain string, queryType uint16, client, preferred string) (*QueryResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	route := s.routeFor(domain)
 	result := s.metadataFor(domain, queryType, route)
 	result.Rcode = dns.RcodeSuccess
@@ -814,6 +823,9 @@ func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, q
 			return result, nil
 		}
 	}
+	if local, found := s.queryLocal(domain, queryType); found {
+		return local, nil
+	}
 
 	failKey := fmt.Sprintf("%s:%d", domain, queryType)
 	svcb := isSVCBType(queryType)
@@ -836,6 +848,7 @@ func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, q
 	var resp *dns.Msg
 	var err error
 
+	var upstreamNames []string
 	if matchedRule == nil {
 		// Use default upstreams
 		defaults := s.upstreamsSnapshot()
@@ -843,23 +856,15 @@ func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, q
 			return nil, errNoUpstream
 		}
 
-		upstreamNames := make([]string, len(defaults))
+		upstreamNames = make([]string, len(defaults))
 		for i, upstream := range defaults {
 			upstreamNames[i] = upstream.Name
 		}
 
-		if s.cfg.ConcurrentQuery {
-			resp, result.UsedUpstream, err = s.resolver.ResolveConcurrent(ctx, domain, queryType, upstreamNames)
-		} else {
-			resp, result.UsedUpstream, err = s.resolver.ResolveMultiple(ctx, domain, queryType, upstreamNames)
-		}
 	} else {
-		if s.cfg.ConcurrentQuery {
-			resp, result.UsedUpstream, err = s.resolver.ResolveConcurrent(ctx, domain, queryType, matchedRule.Upstreams)
-		} else {
-			resp, result.UsedUpstream, err = s.resolver.ResolveMultiple(ctx, domain, queryType, matchedRule.Upstreams)
-		}
+		upstreamNames = matchedRule.Upstreams
 	}
+	resp, result.UsedUpstream, err = s.resolver.ResolveStrategy(ctx, domain, queryType, upstreamNames, s.cfg.QueryStrategy, preferred)
 
 	if err != nil || resp == nil {
 		rule := failureRule(result)
@@ -879,6 +884,11 @@ func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, q
 		return nil, err
 	}
 
+	s.processResponse(result, queryType, resp)
+	return result, nil
+}
+
+func (s *Server) processResponse(result *QueryResult, queryType uint16, resp *dns.Msg) {
 	result.Rcode = resp.Rcode
 	action := normalizeAction(result.Action)
 	allowIPv4 := action == "ipv4+ipv6" || action == "ipv4only"
@@ -934,7 +944,6 @@ func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, q
 		}
 	}
 
-	return result, nil
 }
 
 var (
@@ -1077,6 +1086,7 @@ func (s *Server) ClearCache() {
 		}
 	}
 	s.clearSVCBFailures()
+	s.resolver.ClearSelection()
 }
 
 // ClearNFTSets clears all nftsets referenced by rules

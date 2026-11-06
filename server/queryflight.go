@@ -34,7 +34,11 @@ func (s *Server) startQueryLocked(key, domain string, queryType uint16, client, 
 	go func() {
 		defer s.queryWG.Done()
 		defer cancel()
-		result, err := s.resolveQueryDetailContext(ctx, domain, queryType, client)
+		preferred := ""
+		if previous != nil && previous.Route == route {
+			preferred = previous.Upstream
+		}
+		result, err := s.resolveQueryWithUpstreamContext(ctx, domain, queryType, client, preferred)
 		s.queryMu.Lock()
 		defer s.queryMu.Unlock()
 		if ctx.Err() != nil {

@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
-"Project-Id-Version: UpDNS 1.0.19\n"
-"PO-Revision-Date: 2026-11-01 04:12+0800\n"
+"Project-Id-Version: UpDNS 1.0.34\n"
+"PO-Revision-Date: 2026-11-06 16:53+0800\n"
 "Last-Translator: UpDNS contributors\n"
 "Language-Team: Simplified Chinese\n"
 "Language: zh_CN\n"
@@ -40,8 +40,8 @@ msgstr "设置及端口"
 msgid "Enable UpDNS"
 msgstr "启用"
 
-msgid "Start or stop the UpDNS DNS service."
-msgstr "启动或停止 UpDNS DNS 服务。"
+msgid "Start or stop the UpDNS service."
+msgstr "启动或停止 UpDNS 服务。"
 
 msgid "Port"
 msgstr "端口"
@@ -64,8 +64,17 @@ msgstr "标准 resolv.conf 文件路径；其中的 nameserver 条目会自动�
 msgid "Concurrent Query"
 msgstr "并发查询"
 
-msgid "Query selected upstreams in parallel and use the first response; when disabled, try them in order. Disabled by default."
-msgstr "启用时并发查询规则内所选上游 DNS 并采用首个响应；禁用时按顺序逐个尝试；默认禁用。"
+msgid "Upstream DNS Selection Strategy"
+msgstr "上游 DNS 选择策略"
+
+msgid "Dynamic Scheduling"
+msgstr "动态调度"
+
+msgid "Strict Order"
+msgstr "严格顺序"
+
+msgid "Defines how upstream DNS servers referenced by a rule are selected. Dynamic Scheduling dynamically selects and reuses well-performing upstreams; Strict Order tries them in the configured order; Concurrent Query uses the first valid response."
+msgstr "定义规则内上游 DNS 的选择机制。动态调度会动态选择并复用表现良好的上游；严格顺序会按配置顺序尝试；并发查询则采用首个有效响应。"
 
 msgid "Upstream DNS"
 msgstr "上游 DNS"
@@ -131,8 +140,8 @@ msgstr "缓存"
 msgid "Enable Cache"
 msgstr "启用缓存"
 
-msgid "Cache DNS responses until their applicable TTL expires."
-msgstr "缓存 DNS 响应，直至对应 TTL 到期。"
+msgid "Enable or disable DNS caching."
+msgstr "启用或禁用 UpDNS 缓存。"
 
 msgid "Cache Size"
 msgstr "缓存大小"
@@ -292,12 +301,6 @@ msgstr "上游 DNS IP → NFT"
 
 msgid "Local Answer"
 msgstr "本地应答"
-
-
-
-
-
-
 
 msgid "Select at least one upstream DNS."
 msgstr "请至少选择一个上游 DNS。"

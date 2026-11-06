@@ -692,7 +692,7 @@ return view.extend({
 
 		s = m.section(form.NamedSection, 'general', 'updns', _('Settings and Port'));
 		o = s.option(form.Flag, 'enabled', _('Enable UpDNS'),
-			_('Start or stop the UpDNS DNS service.'));
+			_('Start or stop the UpDNS service.'));
 		o.default = '0';
 		o.rmempty = false;
 		o = s.option(form.Value, 'port', _('Port'),
@@ -708,8 +708,11 @@ return view.extend({
 			_('Path to a standard resolv.conf file. Its nameserver entries are loaded automatically.'));
 		o.default = '/tmp/resolv.conf.d/resolv.conf.auto';
 		o.depends('use_local_resolv', '1');
-		o = s.option(form.Flag, 'concurrent_query', _('Concurrent Query'),
-			_('Query selected upstreams in parallel and use the first response; when disabled, try them in order. Disabled by default.'));
+		o = s.option(form.ListValue, 'query_strategy', _('Upstream DNS Selection Strategy'),
+			_('Defines how upstream DNS servers referenced by a rule are selected. Dynamic Scheduling dynamically selects and reuses well-performing upstreams; Strict Order tries them in the configured order; Concurrent Query uses the first valid response.'));
+		o.value('0', _('Dynamic Scheduling'));
+		o.value('1', _('Strict Order'));
+		o.value('2', _('Concurrent Query'));
 		o.default = '0';
 		o.rmempty = false;
 
@@ -771,7 +774,7 @@ return view.extend({
 
 		s = m.section(form.NamedSection, 'general', 'updns', _('Cache'));
 		o = s.option(form.Flag, 'cache_enabled', _('Enable Cache'),
-			_('Cache DNS responses until their applicable TTL expires.'));
+			_('Enable or disable DNS caching.'));
 		o.default = '1';
 		o.rmempty = false;
 		o = s.option(form.Value, 'cache_size', _('Cache Size'),

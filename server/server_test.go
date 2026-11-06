@@ -960,6 +960,7 @@ func TestSequentialUpstreamsUseTheirOwnTimeouts(t *testing.T) {
 	good := startTestUpstream(t)
 
 	cfg := config.DefaultConfig()
+	cfg.QueryStrategy = config.StrategyStrict
 	cfg.UseLocalResolv = false
 	cfg.CacheEnabled = false
 	cfg.UpstreamDNS = []config.UpstreamDNS{
@@ -1192,7 +1193,7 @@ func TestConcurrentQueryOnlyProcessesWinningResponse(t *testing.T) {
 	defer good.Shutdown()
 	cfg := config.DefaultConfig()
 	cfg.UseLocalResolv = false
-	cfg.ConcurrentQuery = true
+	cfg.QueryStrategy = config.StrategyConcurrent
 	cfg.Rules = []config.Rule{{
 		ID: "fallback", IgnoreDomainMatch: true, Action: "ipv4+ipv6",
 		Upstreams: []string{"bad", "good"}, IPv4NFTSets: []string{"inet/fw4/test"},
@@ -1261,7 +1262,7 @@ func TestCNAMECompletionCachesTerminalNegativeResult(t *testing.T) {
 			defer upstream.Shutdown()
 			cfg := config.DefaultConfig()
 			cfg.UseLocalResolv = false
-			cfg.ConcurrentQuery = true
+			cfg.QueryStrategy = config.StrategyConcurrent
 			cfg.UpstreamDNS = []config.UpstreamDNS{{Name: "test", Protocol: "udp", Address: pc.LocalAddr().String(), Timeout: 1}}
 			srv, err := NewServer(cfg)
 			if err != nil {
@@ -1319,7 +1320,7 @@ func TestSOALessCNAMENODATAIsReturnedButNotCached(t *testing.T) {
 	defer upstream.Shutdown()
 	cfg := config.DefaultConfig()
 	cfg.UseLocalResolv = false
-	cfg.ConcurrentQuery = true
+	cfg.QueryStrategy = config.StrategyConcurrent
 	cfg.UpstreamDNS = []config.UpstreamDNS{{Name: "test", Protocol: "udp", Address: pc.LocalAddr().String(), Timeout: 1}}
 	srv, err := NewServer(cfg)
 	if err != nil {

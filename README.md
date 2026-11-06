@@ -30,9 +30,9 @@ UpDNS 是一个基于 [![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logo
 
 ## 🚀 工作流程
 
-**客户端 → UpDNS → 规则匹配 → 缓存 / 上游 DNS（UDP · TCP · DoT · DoH）→ nftset → 返回结果**
+**客户端 → UpDNS → 规则匹配 → 本地数据 / 缓存 / 上游 DNS（UDP · TCP · DoT · DoH）→ nftset → 返回结果**
 
-UpDNS 作为统一入口接收查询，按规则匹配域名列表，命中缓存则直接返回，否则查询所选上游，解析结果可写入指定的 nftset。
+UpDNS 按规则匹配域名，优先使用 hosts/DHCP 本地数据和有效缓存，否则按“动态调度”（默认）、“严格顺序”或“并发查询”访问所选上游。刷新优先复用原胜出上游；本地数据仍遵守拦截、地址族及 nftset 规则。容量不足仅淘汰最低 HitCount 条目，删除后不保留历史计数。
 
 ## 💻 CLI 输出示例
 

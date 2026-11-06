@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=updns
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=46
+PKG_RELEASE:=50
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=file://$(TOPDIR)/dl
@@ -25,10 +25,10 @@ define Package/updns
   CATEGORY:=Network
   SUBMENU:=DNS
   TITLE:=UpDNS upstream DNS server
-  DEPENDS:=$(GO_ARCH_DEPENDS)
-  EXTRA_DEPENDS:=ca-bundle (>=20260601-r1), nftables-json (>=1.1.6-r1)
+  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +nftables-json
 endef
 
+# 描述 - 软件包
 define Package/updns/description
   DNS forwarding service with UCI configuration, DNS-over-HTTPS upstreams,
   domain rules, caching and nftables set integration.

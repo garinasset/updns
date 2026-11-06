@@ -76,7 +76,7 @@ func TestNegativeSOATTLOnWireAndCache(t *testing.T) {
 	}
 }
 
-func TestUncacheableNegativePreloadDeletesLiveNXDOMAIN(t *testing.T) {
+func TestUncacheableNegativePreloadRetainsLiveNXDOMAIN(t *testing.T) {
 	var calls atomic.Int32
 	var fail atomic.Bool
 	srv := newNegativeTestServer(t, &calls, func(response *dns.Msg) {
@@ -95,10 +95,17 @@ func TestUncacheableNegativePreloadDeletesLiveNXDOMAIN(t *testing.T) {
 	fail.Store(true)
 	srv.preloadCacheEntries()
 	srv.queryWG.Wait()
-	if srv.cache.Size() != 0 {
-		t.Fatal("uncacheable preload must remove the old entry")
+	if srv.cache.Size() != 1 {
+		t.Fatal("uncacheable preload deleted a still valid entry")
 	}
 	result, err := srv.Query("negative.example.", dns.TypeAAAA)
+	if err != nil || result == nil || !result.CacheHit || result.Rcode != dns.RcodeNameError {
+		t.Fatalf("still valid negative cache unavailable: %#v %v", result, err)
+	}
+	entry.CreatedAt = time.Now().Add(-61 * time.Second)
+	entry.ExpireTime = entry.CreatedAt.Add(60 * time.Second)
+	srv.cache.Set("negative.example.:28", entry)
+	result, err = srv.Query("negative.example.", dns.TypeAAAA)
 	if err != nil || result == nil || result.CacheHit || result.Rcode != dns.RcodeNameError || result.TTL != 0 {
 		t.Fatalf("uncacheable refresh not returned correctly: result=%#v error=%v", result, err)
 	}
@@ -129,7 +136,10 @@ func TestSOALessNegativeOnWireAndNoCache(t *testing.T) {
 							}
 						}
 					})
-					srv.cfg.ConcurrentQuery = concurrent
+					srv.cfg.QueryStrategy = config.StrategyStrict
+					if concurrent {
+						srv.cfg.QueryStrategy = config.StrategyConcurrent
+					}
 					pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 					if err != nil {
 						t.Fatal(err)
@@ -195,7 +205,10 @@ func TestUpstreamErrorRcodeWinsWithoutCacheOrWarning(t *testing.T) {
 						A:   net.IPv4(192, 0, 2, 99),
 					}}
 				})
-				srv.cfg.ConcurrentQuery = concurrent
+				srv.cfg.QueryStrategy = config.StrategyStrict
+				if concurrent {
+					srv.cfg.QueryStrategy = config.StrategyConcurrent
+				}
 				srv.cfg.Rules = []config.Rule{{
 					ID: "all", IgnoreDomainMatch: true, Action: "ipv4+ipv6",
 					Upstreams: []string{"test"}, IPv4NFTSets: []string{"inet/fw4/test"},
@@ -258,7 +271,7 @@ func newNegativeTestServer(t *testing.T, calls *atomic.Int32, change func(*dns.M
 	t.Cleanup(func() { _ = upstream.Shutdown() })
 	cfg := config.DefaultConfig()
 	cfg.UseLocalResolv = false
-	cfg.ConcurrentQuery = true
+	cfg.QueryStrategy = config.StrategyConcurrent
 	cfg.UpstreamDNS = []config.UpstreamDNS{{Name: "test", Protocol: "udp", Address: pc.LocalAddr().String(), Timeout: 1}}
 	srv, err := NewServer(cfg)
 	if err != nil {

@@ -15,7 +15,7 @@ func testEntry(ttl uint32, remaining time.Duration) *CacheEntry {
 	return &CacheEntry{TTL: ttl, ExpireTime: now.Add(remaining), CreatedAt: now.Add(remaining - time.Duration(ttl)*time.Second)}
 }
 
-func TestHistoryInheritanceAndFIFO(t *testing.T) {
+func TestUpdatesInheritButDeletionForgetsHits(t *testing.T) {
 	c := NewCache(2)
 	defer c.Stop()
 	c.Set("a", testEntry(100, time.Minute))
@@ -27,32 +27,17 @@ func TestHistoryInheritanceAndFIFO(t *testing.T) {
 		t.Fatal("update lost hits")
 	}
 	c.Remove("a")
-	if c.order.Len() != 1 {
-		t.Fatal("removal missing from history")
-	}
-	c.Set("a", testEntry(100, time.Minute))
-	if entry, _ := c.Snapshot("a"); entry.HitCount != 5 || c.order.Len() != 0 {
-		t.Fatal("history not consumed")
-	}
-	c.Remove("a")
-	for _, key := range []string{"b", "c"} {
-		c.Set(key, testEntry(100, time.Minute))
-		c.Remove(key)
-	}
-	if c.history["a"] != nil || c.order.Len() != 2 {
-		t.Fatal("history is not bounded FIFO")
-	}
 	c.Set("a", testEntry(100, time.Minute))
 	if entry, _ := c.Snapshot("a"); entry.HitCount != 0 {
-		t.Fatal("overwritten history survived")
+		t.Fatal("deleted entry retained historical hits")
 	}
 	c.Clear()
-	if c.Size() != 0 || c.order.Len() != 0 {
-		t.Fatal("clear retained history")
+	if c.Size() != 0 {
+		t.Fatal("clear retained entries")
 	}
 }
 
-func TestCapacityReclaimsExpiredBeforeLFU(t *testing.T) {
+func TestCapacityEvictsLFUWithoutReclaimingHotExpiredEntry(t *testing.T) {
 	c := NewCache(2)
 	defer c.Stop()
 	c.Set("hot-expired", testEntry(100, time.Minute))
@@ -62,15 +47,14 @@ func TestCapacityReclaimsExpiredBeforeLFU(t *testing.T) {
 	c.Set("hot-expired", testEntry(100, -time.Second))
 	c.Set("live", testEntry(100, time.Minute))
 	c.Set("new", testEntry(100, time.Minute))
-	if _, ok := c.Get("live"); !ok {
-		t.Fatal("live entry evicted before expired entry")
+	if entry, _ := c.Snapshot("live"); entry != nil {
+		t.Fatal("cold live entry survived LFU eviction")
 	}
-	if c.history["hot-expired"].Value.(historyEntry).hits != 20 {
-		t.Fatal("expired hits lost")
-	}
-	c.Set("hot-expired", testEntry(100, time.Minute))
 	if entry, _ := c.Snapshot("hot-expired"); entry.HitCount != 20 {
-		t.Fatal("capacity eviction lost history")
+		t.Fatal("hot expired entry was reclaimed")
+	}
+	if c.Size() != 2 {
+		t.Fatal("capacity insertion reclaimed more than one entry")
 	}
 }
 
@@ -233,7 +217,7 @@ func TestIndexedHeapInvariants(t *testing.T) {
 				c.Clear()
 			}
 		}
-		for _, h := range []*entryHeap{&c.expiry, &c.eviction, &c.due, &c.ready} {
+		for _, h := range []*entryHeap{&c.eviction, &c.due, &c.ready} {
 			for index, n := range h.nodes {
 				if n.index[h.kind] != index || c.entries[n.key] != n {
 					t.Fatal("stale heap index")
@@ -243,7 +227,7 @@ func TestIndexedHeapInvariants(t *testing.T) {
 				}
 			}
 		}
-		if c.Size() > 32 || c.order.Len() > 32 || c.expiry.Len() != c.Size() || c.eviction.Len() != c.Size() {
+		if c.Size() > 32 || c.eviction.Len() != c.Size() {
 			t.Fatal("capacity or index leak")
 		}
 	}

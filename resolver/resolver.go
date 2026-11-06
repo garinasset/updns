@@ -55,10 +55,13 @@ type Resolver struct {
 	timeout    time.Duration
 	httpClient *http.Client
 
-	healthMu sync.Mutex
-	down     map[string]*upstreamHealth
-	now      func() time.Time
-	pause    time.Duration
+	healthMu       sync.Mutex
+	down           map[string]*upstreamHealth
+	now            func() time.Time
+	pause          time.Duration
+	selectionMu    sync.Mutex
+	selections     map[string]*selection
+	selectionEpoch uint64
 }
 
 // NewResolver creates a new resolver
@@ -70,6 +73,7 @@ func NewResolver(timeout time.Duration) *Resolver {
 		down:       make(map[string]*upstreamHealth),
 		now:        time.Now,
 		pause:      unreachablePause,
+		selections: make(map[string]*selection),
 	}
 }
 
@@ -80,6 +84,7 @@ func (r *Resolver) RegisterUpstream(upstream *config.UpstreamDNS) error {
 	}
 	r.mu.Lock()
 	r.upstreams[upstream.Name] = upstream
+	r.ClearSelection()
 	r.mu.Unlock()
 	return nil
 }
@@ -107,6 +112,7 @@ func (r *Resolver) ReplaceUpstreamsWithPrefix(prefix string, upstreams []*config
 		}
 		r.upstreams[upstream.Name] = upstream
 	}
+	r.ClearSelection()
 }
 
 // Resolve performs DNS resolution against a specific upstream

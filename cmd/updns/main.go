@@ -461,16 +461,7 @@ func addressFamilyState(results []*server.QueryResult, queryType string) *bool {
 func queryPath(results []*server.QueryResult) string {
 	paths := make([]string, 0, len(results))
 	for _, result := range results {
-		path := "Upstream Query"
-		if result.CacheHit {
-			path = "Cache Hit"
-		} else if result.PrefetchWait {
-			path = "Prefetch Hit"
-		} else if strings.EqualFold(result.Action, "nxdomain") {
-			path = "NXDOMAIN RULE"
-		} else if strings.EqualFold(result.Action, "zeroip") {
-			path = "ZERO-IP RULE"
-		}
+		path := result.Path()
 		paths = append(paths, result.QueryType+"="+path)
 	}
 	if len(paths) == 0 {

@@ -30,9 +30,9 @@ It works equally well as a **standalone DNS server** that answers clients direct
 
 ## 🚀 Workflow
 
-**Client → UpDNS → Rule matching → Cache / Upstream DNS (UDP · TCP · DoT · DoH) → nftset → Response**
+**Client → UpDNS → Rule matching → Local data / Cache / Upstream DNS (UDP · TCP · DoT · DoH) → nftset → Response**
 
-UpDNS receives queries at a single entry point and matches the domain against your rules. A cache hit is answered directly; otherwise the selected upstreams are queried. Resolved addresses can be written to the nftsets specified by the rule.
+UpDNS matches rules and checks hosts/DHCP local data and valid cache before querying upstreams with Dynamic Scheduling (default), Strict Order or Concurrent Query. Refreshes first reuse the original winning upstream. Local data respects blocking, address-family and nftset rules. Capacity eviction chooses the lowest HitCount only; deleted counts are not retained.
 
 ## 💻 CLI Output Example
 

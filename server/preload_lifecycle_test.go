@@ -120,7 +120,7 @@ func TestExpiredClientsSharePreloadAndReportWait(t *testing.T) {
 	}
 }
 
-func TestPreloadFailureDeletesLiveEntryAndRestoresHistory(t *testing.T) {
+func TestPreloadFailureRetainsLiveEntryAndRetriesAtExpiry(t *testing.T) {
 	var fail atomic.Bool
 	fail.Store(true)
 	srv := newFlightTestServer(t, func(w dns.ResponseWriter, query *dns.Msg) {
@@ -137,17 +137,29 @@ func TestPreloadFailureDeletesLiveEntryAndRestoresHistory(t *testing.T) {
 	seedPreload(srv, "failed.example.", 10*time.Second)
 	srv.preloadCacheEntries()
 	srv.queryWG.Wait()
-	if srv.cache.Size() != 0 {
-		t.Fatal("failed prefetch retained live entry")
+	if srv.cache.Size() != 1 {
+		t.Fatal("failed prefetch deleted live entry")
 	}
-	fail.Store(false)
+	srv.preloadCacheEntries()
+	srv.queryMu.Lock()
+	pending := srv.preloading
+	srv.queryMu.Unlock()
+	if pending != 0 {
+		t.Fatal("failed live prefetch was immediately retried")
+	}
 	result, err := srv.Query("failed.example.", dns.TypeA)
+	if err != nil || !result.CacheHit {
+		t.Fatalf("live entry unavailable: %#v %v", result, err)
+	}
+	seedPreload(srv, "failed.example.", -time.Second)
+	fail.Store(false)
+	result, err = srv.Query("failed.example.", dns.TypeA)
 	if err != nil || result.CacheHit {
 		t.Fatalf("new query: %#v %v", result, err)
 	}
 	entry, _ := srv.cache.Snapshot("failed.example.:1")
-	if entry.HitCount != 7 {
-		t.Fatal("failed prefetch lost historical hits")
+	if entry.HitCount != 8 {
+		t.Fatal("refresh lost hits on retained entry")
 	}
 }
 

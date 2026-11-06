@@ -53,8 +53,6 @@ CONFIG_PACKAGE_luci-app-updns=m
 CONFIG_LUCI_LANG_zh_Hans=y
 EOF
 make defconfig
-# Runtime-only requirements are recorded in package metadata via EXTRA_DEPENDS
-# so compiling these packages does not also build nftables' kernel dependencies.
 # Keep any remaining build trees between package targets.
 make CONFIG_AUTOREMOVE= package/updns/compile package/feeds/luci/luci-app-updns/compile
 

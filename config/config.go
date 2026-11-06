@@ -12,12 +12,24 @@ import (
 // LocalResolverPrefix is the name prefix of upstreams read from the local resolver file.
 const LocalResolverPrefix = "local-resolv-"
 
+type QueryStrategy string
+
+const (
+	StrategyOptimal    QueryStrategy = "0"
+	StrategyStrict     QueryStrategy = "1"
+	StrategyConcurrent QueryStrategy = "2"
+)
+
+func (s QueryStrategy) Valid() bool {
+	return s == StrategyOptimal || s == StrategyStrict || s == StrategyConcurrent
+}
+
 type Config struct {
 	Enabled         bool
 	Port            int
 	UseLocalResolv  bool
 	LocalResolvFile string
-	ConcurrentQuery bool
+	QueryStrategy   QueryStrategy
 	CacheEnabled    bool
 	CacheSize       int
 	ActivePreload   bool
@@ -61,7 +73,7 @@ func DefaultConfig() *Config {
 		Port:            153,
 		UseLocalResolv:  true,
 		LocalResolvFile: "/tmp/resolv.conf.d/resolv.conf.auto",
-		ConcurrentQuery: false,
+		QueryStrategy:   StrategyOptimal,
 		CacheEnabled:    true,
 		CacheSize:       4096,
 		ActivePreload:   true,
@@ -109,7 +121,10 @@ func LoadFromUCI(configPath string) (*Config, error) {
 			}
 			if err == nil {
 				cfg.LocalResolvFile = optionOr(section, "local_resolv_file", cfg.LocalResolvFile)
-				cfg.ConcurrentQuery, err = parseBoolOption(section, "concurrent_query", cfg.ConcurrentQuery)
+				cfg.QueryStrategy = QueryStrategy(optionOr(section, "query_strategy", string(cfg.QueryStrategy)))
+				if !cfg.QueryStrategy.Valid() {
+					err = fmt.Errorf("query_strategy must be 0 (smart selection), 1 (strict order) or 2 (concurrent query)")
+				}
 			}
 			if err == nil {
 				cfg.CacheEnabled, err = parseBoolOption(section, "cache_enabled", cfg.CacheEnabled)
@@ -212,7 +227,7 @@ func SaveToUCI(cfg *Config, configPath string) error {
 	writeOption(&content, "port", strconv.Itoa(cfg.Port))
 	writeOption(&content, "use_local_resolv", boolString(cfg.UseLocalResolv))
 	writeOption(&content, "local_resolv_file", cfg.LocalResolvFile)
-	writeOption(&content, "concurrent_query", boolString(cfg.ConcurrentQuery))
+	writeOption(&content, "query_strategy", string(cfg.QueryStrategy))
 	writeOption(&content, "cache_enabled", boolString(cfg.CacheEnabled))
 	writeOption(&content, "cache_size", strconv.Itoa(cfg.CacheSize))
 	writeOption(&content, "active_preload", boolString(cfg.ActivePreload))

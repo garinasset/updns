@@ -2,7 +2,6 @@ package cache
 
 import (
 	"container/heap"
-	"container/list"
 	"math"
 	"sync"
 	"time"
@@ -29,11 +28,12 @@ type CacheEntry struct {
 type node struct {
 	key     string
 	entry   CacheEntry
-	index   [4]int
+	index   [3]int
 	touched uint64
+	refresh time.Time
 }
 
-// Independent indices track expiration, eviction, refresh due, and ready tasks.
+// Independent indices track eviction, refresh due, and ready tasks.
 type entryHeap struct {
 	nodes []*node
 	kind  int
@@ -43,22 +43,19 @@ func (h entryHeap) Len() int { return len(h.nodes) }
 func (h entryHeap) Less(i, j int) bool {
 	a, b := h.nodes[i], h.nodes[j]
 	switch h.kind {
-	case 0, 3:
-		if !a.entry.ExpireTime.Equal(b.entry.ExpireTime) {
-			return a.entry.ExpireTime.Before(b.entry.ExpireTime)
-		}
-	case 1:
+	case 0:
 		if a.entry.HitCount != b.entry.HitCount {
 			return a.entry.HitCount < b.entry.HitCount
 		}
 		if a.touched != b.touched {
 			return a.touched < b.touched
 		}
-	case 2:
-		aDue, bDue := a.entry.preloadAt(), b.entry.preloadAt()
-		if !aDue.Equal(bDue) {
-			return aDue.Before(bDue)
+	case 1:
+		if !a.refresh.Equal(b.refresh) {
+			return a.refresh.Before(b.refresh)
 		}
+		fallthrough
+	case 2:
 		if !a.entry.ExpireTime.Equal(b.entry.ExpireTime) {
 			return a.entry.ExpireTime.Before(b.entry.ExpireTime)
 		}
@@ -83,22 +80,14 @@ func (h *entryHeap) Pop() interface{} {
 	return n
 }
 
-type historyEntry struct {
-	key  string
-	hits int
-}
-
 // Cache retains expired entries for refresh, never for serving stale DNS data.
 type Cache struct {
 	mu       sync.Mutex
 	entries  map[string]*node
 	maxSize  int
-	expiry   entryHeap
 	eviction entryHeap
 	due      entryHeap
 	ready    entryHeap
-	history  map[string]*list.Element
-	order    list.List
 	sequence uint64
 	epoch    uint64
 }
@@ -109,9 +98,7 @@ func NewCache(maxSize int) *Cache {
 	}
 	return &Cache{
 		entries: make(map[string]*node), maxSize: maxSize,
-		expiry: entryHeap{kind: 0}, eviction: entryHeap{kind: 1},
-		due: entryHeap{kind: 2}, ready: entryHeap{kind: 3},
-		history: make(map[string]*list.Element),
+		eviction: entryHeap{kind: 0}, due: entryHeap{kind: 1}, ready: entryHeap{kind: 2},
 	}
 }
 
@@ -140,19 +127,8 @@ func (c *Cache) setLocked(key string, entry *CacheEntry) {
 		touched = previous.touched
 		c.detachLocked(previous)
 	} else {
-		if old := c.history[key]; old != nil {
-			copyEntry.HitCount = old.Value.(historyEntry).hits
-			c.order.Remove(old)
-			delete(c.history, key)
-		}
 		if len(c.entries) >= c.maxSize {
-			now := time.Now()
-			for c.expiry.Len() > 0 && !c.expiry.nodes[0].entry.ExpireTime.After(now) {
-				c.removeLocked(c.expiry.nodes[0].key)
-			}
-			if len(c.entries) >= c.maxSize {
-				c.removeLocked(c.eviction.nodes[0].key)
-			}
+			c.removeLocked(c.eviction.nodes[0].key)
 		}
 	}
 	c.sequence++
@@ -160,24 +136,26 @@ func (c *Cache) setLocked(key string, entry *CacheEntry) {
 	if touched == 0 {
 		touched = c.sequence
 	}
-	n := &node{key: key, entry: copyEntry, index: [4]int{-1, -1, -1, -1}, touched: touched}
+	n := &node{key: key, entry: copyEntry, index: [3]int{-1, -1, -1}, touched: touched, refresh: copyEntry.preloadAt()}
 	c.entries[key] = n
-	heap.Push(&c.expiry, n)
 	heap.Push(&c.eviction, n)
 	heap.Push(&c.due, n)
 }
 
 func (c *Cache) detachLocked(n *node) {
-	heap.Remove(&c.expiry, n.index[0])
-	heap.Remove(&c.eviction, n.index[1])
-	// A scheduled entry is absent from both due queues.
-	if n.index[2] >= 0 {
-		heap.Remove(&c.due, n.index[2])
-	}
-	if n.index[3] >= 0 {
-		heap.Remove(&c.ready, n.index[3])
-	}
+	heap.Remove(&c.eviction, n.index[0])
+	c.unscheduleLocked(n)
 	delete(c.entries, n.key)
+}
+
+func (c *Cache) unscheduleLocked(n *node) {
+	// A scheduled entry is absent from both due queues.
+	if n.index[1] >= 0 {
+		heap.Remove(&c.due, n.index[1])
+	}
+	if n.index[2] >= 0 {
+		heap.Remove(&c.ready, n.index[2])
+	}
 }
 
 func (c *Cache) removeLocked(key string) {
@@ -186,15 +164,6 @@ func (c *Cache) removeLocked(key string) {
 		return
 	}
 	c.detachLocked(n)
-	if old := c.history[key]; old != nil {
-		c.order.Remove(old)
-	}
-	c.history[key] = c.order.PushBack(historyEntry{key, n.entry.HitCount})
-	for c.order.Len() > c.maxSize {
-		first := c.order.Front()
-		delete(c.history, first.Value.(historyEntry).key)
-		c.order.Remove(first)
-	}
 }
 
 // Snapshot supplies a version token without counting a cache hit.
@@ -214,12 +183,7 @@ func (c *Cache) Suspend(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if n := c.entries[key]; n != nil {
-		if n.index[2] >= 0 {
-			heap.Remove(&c.due, n.index[2])
-		}
-		if n.index[3] >= 0 {
-			heap.Remove(&c.ready, n.index[3])
-		}
+		c.unscheduleLocked(n)
 	}
 }
 
@@ -229,7 +193,7 @@ func (c *Cache) TakePreloads(limit int) ([]*CacheEntry, uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now()
-	for c.due.Len() > 0 && !now.Before(c.due.nodes[0].entry.preloadAt()) {
+	for c.due.Len() > 0 && !now.Before(c.due.nodes[0].refresh) {
 		heap.Push(&c.ready, heap.Pop(&c.due))
 	}
 	var selected []*CacheEntry
@@ -257,13 +221,36 @@ func (c *Cache) Commit(key string, previous *CacheEntry, epoch uint64, replaceme
 	} else if current == nil || current.entry.version != previous.version {
 		return false
 	}
-	c.setLocked(key, replacement)
+	if replacement == nil || replacement.TTL == 0 {
+		if current != nil && time.Now().Before(current.entry.ExpireTime) {
+			c.unscheduleLocked(current)
+			current.refresh = current.entry.ExpireTime
+			heap.Push(&c.due, current)
+		} else {
+			c.removeLocked(key)
+		}
+	} else {
+		c.setLocked(key, replacement)
+	}
 	return true
 }
 
 func (c *Cache) Get(key string) (*CacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.getLocked(key)
+}
+
+func (c *Cache) GetForRoute(key, route string) (*CacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if n := c.entries[key]; n == nil || n.entry.Route != route {
+		return nil, false
+	}
+	return c.getLocked(key)
+}
+
+func (c *Cache) getLocked(key string) (*CacheEntry, bool) {
 	n := c.entries[key]
 	now := time.Now()
 	if n == nil || !now.Before(n.entry.ExpireTime) {
@@ -274,7 +261,7 @@ func (c *Cache) Get(key string) (*CacheEntry, bool) {
 	}
 	c.sequence++
 	n.touched = c.sequence
-	heap.Fix(&c.eviction, n.index[1])
+	heap.Fix(&c.eviction, n.index[0])
 	result := n.entry
 	result.Answers, result.Authority = cloneRecords(n.entry.Answers), cloneRecords(n.entry.Authority)
 	elapsed := uint32(0)
@@ -303,9 +290,7 @@ func (c *Cache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = make(map[string]*node)
-	c.history = make(map[string]*list.Element)
-	c.order.Init()
-	c.expiry.nodes, c.eviction.nodes, c.due.nodes, c.ready.nodes = nil, nil, nil, nil
+	c.eviction.nodes, c.due.nodes, c.ready.nodes = nil, nil, nil
 	c.epoch++
 }
 func (c *Cache) Stop() { c.Clear() }

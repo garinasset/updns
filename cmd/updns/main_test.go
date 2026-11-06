@@ -26,8 +26,16 @@ func TestQueryPathReportsPrefetchWait(t *testing.T) {
 		{QueryType: "A", PrefetchWait: true},
 		{QueryType: "AAAA", CacheHit: true},
 	}
+
 	if got := queryPath(results); got != "A=Prefetch Hit / AAAA=Cache Hit" {
 		t.Fatalf("incorrect wait path: %s", got)
+	}
+}
+
+func TestQueryPathReportsLocalAnswer(t *testing.T) {
+	results := []*server.QueryResult{{QueryType: "A", LocalAnswer: true}, {QueryType: "AAAA", LocalAnswer: true}}
+	if got := queryPath(results); got != "Local Answer" {
+		t.Fatalf("local query path = %q", got)
 	}
 }
 

@@ -14,7 +14,8 @@ UpDNS 是一个 OpenWrt 的 DNS 服务。它通过 UDP/TCP 接收查询，根据
 
 主要能力：
 
-- **规则**：按域名列表匹配，支持顺序查询或并发查询多个上游、地址族过滤、NXDOMAIN 响应和 Zero-IP 拦截（返回 0.0.0.0 / ::）等。
+- **规则**：按域名列表匹配，支持动态调度、严格顺序和并发查询策略、地址族过滤、NXDOMAIN 响应和 Zero-IP 拦截（返回 0.0.0.0 / ::）等。
+- **本地解析**：优先回答 hosts 和 OpenWrt DHCP 本地记录，再查缓存和上游；本地数据仍遵守规则。
 - **缓存**：支持容量限制及主动预取。
 - **主动预取**（默认启用）：后台每 100 毫秒调度已消耗至少 80% TTL 的条目，包括已过期条目；
 - **nftables**：可分别将解析得到的 IPv4 和 IPv6 地址加入规则指定的集合；也可选择加入规则所引用上游 DNS 端点的 IP 地址。
@@ -78,11 +79,25 @@ HTTPS/SVCB 处理规则：
 
 规则还可选择把其引用上游 DNS 端点的 IP 地址加入对应 nftables set。主机名（包括 DoH URL 主机名）会解析为 IP，并定期刷新；新地址会添加到集合中，不会自动从共享集合删除旧地址。
 
-### 并发查询
+### 本地解析
 
-若启用并发查询，将并发查询规则内所选上游，并以首个有效 DNS 响应胜出；否则按配置顺序逐个查询，直到获得有效响应。没有匹配规则且没有兜底规则时，默认会使用整个上游 DNS 列表(如果有)；启用本地 resolver 时，其上游排在其他上游之前。
+UpDNS 直接读取 `/etc/hosts`、`/tmp/hosts/` 下的 hosts 文件和 DHCP 租约，支持 A、AAAA、PTR 和 ANY。本地域名及路径取自 `/etc/config/dhcp` 的第一个 dnsmasq 配置段：`domain`、`expandhosts`、`leasefile`、`addnhosts` 和 `hostsdir`；也读取 odhcpd 的 `hostsdir`。无 OpenWrt DHCP 配置时，默认租约路径为 `/tmp/dhcp.leases`、域名后缀为 `lan`，不自动扩展 hosts 短名称。
 
-两种模式遵循相同的响应判定与缓存规则：
+本地记录优先于旧的上游缓存，hosts 优先于同名 DHCP 租约；租约到期不再使用。文件、目录和本地域名设置在查询时检测更新，解析结果使用 TTL 0，不写入 DNS 缓存、不做周期预取；日志和 CLI 显示 `Local Answer`。本地记录不绕过 NXDOMAIN/Zero-IP 拦截，也遵守地址族过滤和 nftset 规则。本地数据文件无法读取或解析时记录限频告警，并继续使用缓存和上游解析。`use_local_resolv` 只控制从 resolv.conf 导入上游地址，与本地记录解析无关。
+
+### 上游 DNS 选择策略
+
+`query_strategy` 仅接受 `0`、`1`、`2`，默认 `0`；不兼容原单词配置值：
+
+- **动态调度（0）**：同一个有序上游组首次并发选取能响应的上游，后续通常只查询该上游。完成 50 次单上游选择后，或距离上次重评达到 20 秒，在下一次初始解析时重新并发评估；没有独立后台探测。原上游传输失败或响应无效时重新选择。名称表示自适应优选，不保证始终延迟最低。
+- **严格顺序（1）**：按引用顺序逐个尝试，直到获得有效最终响应。
+- **并发查询（2）**：并发请求所选上游，以首个有效最终响应胜出，取消其他在途请求。
+
+三种策略统一适用于 UDP/TCP/DoT/DoH，保留本项目各上游超时、CNAME 补查和取消机制。动态调度借鉴 [dnsmasq 官方手册](https://thekelleys.org.uk/dnsmasq/docs/dnsmasq-man.html)及其 [2.93 发布版](https://thekelleys.org.uk/dnsmasq/dnsmasq-2.93.tar.gz)的优选设计，但不照搬客户端驱动重试或协议分支差异。上游配置变化和清空缓存会重置优选状态。
+
+有效缓存直接返回，不产生上游查询。过期刷新和主动预取优先使用该条目原胜出上游，不参与常规组重评；仅当原上游不可用或响应无效时，按所选策略尝试当前组其他上游，成功后更新条目路径。规则或服务绑定发生变化时重新校验路由，不固守旧策略。没有匹配规则且没有兜底规则时，使用整个上游列表；本地 resolver 上游排在其他上游之前。
+
+三种策略遵循相同的响应判定与缓存规则：
 
 - **响应有效性：** 响应须匹配请求的 ID、操作码、问题域名（不区分大小写）、类型和类，并设置响应标志。有效性不受 RCODE 限制，`NOERROR`、`NXDOMAIN`、`FORMERR`、`SERVFAIL`、`REFUSED`、`NOTIMP` 等有效响应均可胜出。错误码响应即使省略 Question，也保留实际 RCODE 和 Question 数量用于诊断。
 - **CNAME 处理：** `NOERROR` 响应须包含所查类型记录，或完整的 CNAME 链及其终点结果。遇到未完成的 CNAME 链，在同一上游补查链终点，沿用原规则、超时预算和取消信号，不重新匹配规则。最多允许 16 跳，并检测跨响应循环。仅含 NS 委派、无 SOA 的 referral 不是终点结果；`NXDOMAIN` 不得包含所查类型的终点记录。
@@ -97,19 +112,19 @@ HTTPS/SVCB 处理规则：
 
 收到有效的 NXDOMAIN / NODATA 后，先将响应 SOA 记录自身的 TTL 归一为 `min(SOA TTL, SOA.MINIMUM)`，首次下游响应与入缓存的 SOA 均使用该值；缓存命中按存储经过时间继续递减，不会因读取而重置 TTL。CNAME 链较短时可以使整包缓存提前到期，但不会改变 SOA.MINIMUM 字段；正向答复和直接查询 SOA 记录不做负缓存 TTL 归一化。
 
-#### HitCount 与 EvictionPool
+#### HitCount
 
 缓存键为小写完整域名与查询类型，A、AAAA 独立缓存。条目 HitCount 初始为 0，每次有效缓存命中加 1（包括 CLI）；首次上游查询、预取及等待预取不增加命中数。更新条目继承当前版本的全部命中数，包括刷新期间收到的命中；计数饱和递增，不回绕、不做时间衰减。
 
-EvictionPool 是容量与缓存一致的有界历史池，只保存键和 HitCount，不保存 DNS 报文。普通删除、过期回收及容量淘汰均将条目移入历史池；同键记录更新至队尾，满时覆盖最早移入的记录。重新添加同键条目时，取出并消费历史记录以继承 HitCount；历史已被覆盖则从 0 开始。
+不再保存删除或淘汰后的计数历史。只有仍存在的条目在刷新替换时继承 HitCount；删除、容量淘汰后重新添加同键条目从 0 开始。
 
 #### 添加、删除与生命周期
 
-不再运行原先的 30 秒定时清理。新增条目容量不足时，先回收全部已过期条目；仍不足则淘汰 HitCount 最低的条目，同计数时淘汰最久未被客户端命中（未命中过则按首次添加顺序）的条目。后台刷新不会提升此同频次优先级。
+不运行定时过期清理。新增条目容量不足时只淘汰一个 HitCount 最低的条目，不优先回收过期条目；同计数时淘汰最久未被客户端命中（未命中过则按首次添加顺序）的条目。后台刷新不会提升此同频次优先级。因此，高命中的过期条目可能保留而淘汰有效冷条目。
 
 TTL 到期不立即删除，也不允许返回旧数据：保留条目用于调度预取和继承命中数。关闭主动预取时，过期条目可保留到容量回收或下一次请求重新解析；缓存数量表示总占用，包含过期条目，不等于可直接应答的数量。
 
-缓存与历史池均仅驻留内存，不跨进程持久化。显式清空、停止、重启及 OpenWrt 配置重载（实际重启）同时清除缓存、历史和任务状态；清空不将全部旧条目转存历史。每次替换使用单调版本号，清空使用代次号，旧任务既不能删除/覆盖新版本，也不能复活已淘汰或已清空条目。
+缓存仅驻留内存，不跨进程持久化。显式清空、停止、重启及 OpenWrt 配置重载（实际重启）清除缓存和任务状态。每次替换使用单调版本号，清空使用代次号，旧任务既不能删除/覆盖新版本，也不能复活已淘汰或已清空条目。
 
 #### 主动预取与请求合并
 
@@ -119,7 +134,7 @@ TTL 到期不立即删除，也不允许返回旧数据：保留条目用于调�
 - 已过期且正在预取：等待同一个任务完成，路径为 `Prefetch Hit`；成功返回新答复，失败返回失败，绝不返回过期缓存。日志及 CLI 保留此路径。该名称表示复用预取结果，不计作缓存命中。
 - 已过期但尚未预取，或完全未缓存：由前台立即启动解析，路径为 `Upstream Query`；不受后台 8 个名额限制。相同键的其他前台请求及后台扫描复用该在途任务，不重复查询。
 
-刷新成功且 TTL 大于 0 时替换对应旧版本并继承 HitCount；刷新失败、TTL 为 0 或胜出响应不可缓存（如错误码、无 SOA 的否定响应）时，删除对应旧版本并将命中数移入 EvictionPool，即使旧条目尚未过期也删除。这是主动牺牲旧答案剩余有效期的策略，不保留失败条目做周期重试；后续客户端请求可以重新解析并继承历史计数。
+刷新成功且 TTL 大于 0 时替换对应旧版本并继承 HitCount。刷新失败、TTL 为 0 或胜出响应不可缓存（如错误码、无 SOA 的否定响应）时：旧条目未过期则保留答复、原过期时间、原路径及计数，推迟到原过期时刻再预取，避免每 100ms 重试；旧条目已过期则删除，不返回过期答复、不保存计数历史，也不再后台重试该名称。后续客户端可重新解析，重新缓存后的 HitCount 从 0 开始。
 
 有效不等于可缓存：上游原始 TTL 为 0、无 SOA 的 NOERROR/NXDOMAIN 及错误码响应均不入缓存、不进入周期预取；这些胜出响应仍交付等待者，保留原 RCODE。正常负缓存使用 `min(SOA TTL, SOA.MINIMUM)`；CNAME 链与终点否定结果共同缓存时，有效期还受 CNAME TTL 限制。并发/顺序查询仍沿用相同上游选择规则。后台 8 个任务不等于 8 个网络请求：上游并发及 CNAME/TCP 补查可能增加实际请求数；100 毫秒也不是完成时限。
 
@@ -127,7 +142,7 @@ TTL 到期不立即删除，也不允许返回旧数据：保留条目用于调�
 
 #### 数据结构与性能
 
-缓存使用哈希表及索引最小堆：分别索引过期时间、LFU 淘汰顺序、80% 刷新时刻和已就绪任务的过期优先级。历史池使用哈希表加双向链表，移入、继承和 FIFO 淘汰均为 O(1)。命中优先级更新、添加/删除和单条调度为 O(log N)，空闲扫描为 O(1)；到期条目仅在状态转换时进入就绪队列，避免每 100 毫秒全量遍历、排序和复制 DNS 记录。所有索引随删除同步回收，无无界失效节点积累；总体空间 O(N)，在途任务表另按实际共享解析数计。
+缓存使用哈希表及三个索引最小堆：LFU 淘汰顺序、刷新时刻和已就绪任务的过期优先级，不再维护过期回收索引或历史池。命中优先级更新、添加/删除和单条调度为 O(log N)，空闲扫描为 O(1)；到期条目仅在状态转换时进入就绪队列，避免每 100 毫秒全量遍历、排序和复制 DNS 记录。所有索引随删除同步回收，无无界失效节点积累；总体空间 O(N)，在途任务表另按实际共享解析数计。
 
 ### 基本 UCI 示例
 
@@ -137,7 +152,7 @@ config updns 'general'
     option port '153'
     option use_local_resolv '1'
     option local_resolv_file '/tmp/resolv.conf.d/resolv.conf.auto'
-    option concurrent_query '0'
+    option query_strategy '0'
     option cache_enabled '1'
     option cache_size '4096'
     option active_preload '1'
@@ -170,14 +185,14 @@ config rule 'example_rule'
 | 页面区域 | UCI section / 字段 | 产品行为 |
 |---|---|---|
 | 运行状态 | 服务状态、缓存状态文件 | 展示服务状态和缓存条目数，并定期刷新 |
-| 设置及端口 | `updns.general`：`enabled`、`port`、`use_local_resolv`、`local_resolv_file`、`concurrent_query` | 启停服务、监听端口、本地 resolver 和上游查询模式 |
+| 设置及端口 | `updns.general`：`enabled`、`port`、`use_local_resolv`、`local_resolv_file`、`query_strategy` | 启停服务、监听端口、本地 resolver 和上游 DNS 选择策略 |
 | 上游 DNS | `updns.upstream`：`name`、`address`、`protocol`、`timeout` | 管理 UDP/TCP/DoT/DoH 上游 |
 | 域名列表 | `updns.domainlist`：`name`、`file` | 上传或管理列表文件，供规则引用 |
 | 缓存 | `updns.general`：`cache_enabled`、`cache_size`、`active_preload` | 控制缓存、容量和主动预取 |
 | 日志 | `updns.general`：`log_query`、`log_level` | 控制查询日志和日志级别 |
 | 规则 | `updns.rule`：`name`、`domain_match`、`domain_lists`、`upstreams`、`action`、`ipv4_nftsets`、`ipv6_nftsets`、`add_upstream_ips` | 设置匹配条件、上游、返回类型及 nftables 处理 |
 
-新安装默认 `enabled=0`，服务不会自动启动；默认端口 `153`、使用本地 resolver、顺序查询、缓存启用且容量为 `4096`、主动预取启用、查询日志关闭。
+新安装默认 `enabled=0`，服务不会自动启动；默认端口 `153`、使用本地 resolver、动态调度、缓存启用且容量为 `4096`、主动预取启用、查询日志关闭。旧 `concurrent_query` 字段已移除，不做兼容映射；没有 `query_strategy` 时使用 `0`（动态调度），原单词配置值会报错，升级前需改为对应数字。
 
 规则编辑页的“拦截”下拉框（不拦截 / NXDOMAIN 返回 / Zero-IP 返回）是 `action` 字段的界面控件，不是独立 UCI 字段：选择 NXDOMAIN 返回对应 `action='nxdomain'`，Zero-IP 返回对应 `action='zeroip'`；选择后隐藏并清除上游、nftables set 及“并返回”选项。
 
@@ -247,6 +262,8 @@ root@OpenWrt:~# updns google.com
 ```
 
 服务运行时，CLI 通过本机控制接口查询，使用服务的规则、缓存并显示 nftables 集合信息；服务未运行时会独立查询，不使用服务缓存。查询默认分别执行 A 和 AAAA 查询。
+
+`Query Path` 的 `Local Answer` 表示直接来自本地 hosts/DHCP；`Cache Hit` 表示有效缓存；`Prefetch Hit` 表示等待并复用预取任务；`Upstream Query` 表示前台解析。`Upstream` 在本地答复时显示 `local-hosts` 或 `local-dhcp`。
 
 查询失败时仍会输出完整报告：`Response` 显示 `ERROR`，并新增 `ERRORS` 分区，按查询类型给出一行规范化的简短原因（如 `Upstream timeout`、`Upstream connection refused`、`Upstream host unresolvable`、`Network not ready`、`No upstream configured`、`All upstreams failed`），命令以非 0 退出码结束。仅 A 或 AAAA 之一失败时，另一类结果照常显示，只要有一类成功退出码即为 0。边框宽度自适应终端宽度（最小 48、最大 80 列）。
 

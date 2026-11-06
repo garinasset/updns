@@ -14,9 +14,10 @@ Supported upstream protocols: UDP, TCP, DNS over TLS (DoT), and DNS over HTTPS (
 
 Main capabilities:
 
-- **Rules**: match by domain list; query multiple upstreams sequentially or concurrently; address-family filtering, NXDOMAIN responses, and Zero-IP Blocking (returning 0.0.0.0 / ::).
+- **Rules**: match by domain list; Dynamic Scheduling, Strict Order and Concurrent Query strategies; address-family filtering, NXDOMAIN responses, and Zero-IP Blocking (returning 0.0.0.0 / ::).
+- **Local data**: resolve hosts and OpenWrt DHCP names before upstream cache or network queries, while respecting rules.
 - **Cache**: positive entries are managed by the record TTL; negative entries use the RFC 2308 TTL from the response SOA. Cache hits return a decremented TTL. Capacity limit and active preload are supported.
-- **Active preload** (enabled by default): every 100 ms, schedule entries that have consumed at least 80% of their TTL, including expired entries. Earliest expiration wins, with at most 8 background tasks in flight globally; scans do not wait for a batch to finish. Expired queries can share a running refresh as `Prefetch Hit`; stale DNS data is never served. Failed refreshes delete the corresponding old version and preserve historical hit counts. See Cache below.
+- **Active preload** (enabled by default): every 100 ms, schedule entries that have consumed at least 80% of their TTL, including expired entries. Earliest expiration wins, with at most 8 background tasks in flight globally; scans do not wait for a batch to finish. Expired queries can share a running refresh as `Prefetch Hit`; stale DNS data is never served. Failed refreshes preserve still-valid entries, but delete expired entries without retaining hit history. See Cache below.
 - **nftables**: add resolved IPv4 and IPv6 addresses to the sets specified by a rule; optionally also add the endpoint addresses of the upstreams referenced by the rule.
 - **LuCI**: manage the service, upstreams, domain lists, cache, logging, and rules from a web UI.
 - **CLI**: `updns <domain>` shows the query result, matched rule, cache/upstream path, and nftables set status.
@@ -73,9 +74,25 @@ HTTPS/SVCB handling:
 - **Binding lifetime:** Bindings expire with the record TTL, at least 30 seconds. Capacity equals `cache_size`; when full, new HTTPS/SVCB records are dropped and active bindings are never evicted. After binding, target addresses are prefetched asynchronously; no synchronous follow-up query is made.
 - **Limits:** If the target name itself matches an `nxdomain`/`zeroip` rule, or the chain (including CNAMEs) exceeds 16 hops, the HTTPS/SVCB record is dropped so blocking cannot be bypassed. Queries without a matching rule (default upstreams) create no binding. Error-RCODE responses are returned verbatim but create no binding, and their hints are not written to sets.
 
-A rule (except `nxdomain` and `zeroip`) can select one or more upstreams and specify separate nftables sets for IPv4/IPv6. With concurrent query enabled, the rule's selected upstreams are queried concurrently and the first valid DNS response wins; otherwise they are queried one by one in configured order until a valid response is obtained. If no rule matches and there is no fallback rule, the whole upstream DNS list (if any) is used; when the local resolver is enabled, its upstreams come before the other upstreams.
+### Local resolution
 
-Both modes follow the same response and caching rules:
+UpDNS reads `/etc/hosts`, hosts files under `/tmp/hosts/`, and DHCP leases directly, supporting A, AAAA, PTR and ANY. The first dnsmasq section of `/etc/config/dhcp` supplies `domain`, `expandhosts`, `leasefile`, `addnhosts` and `hostsdir`; odhcpd's `hostsdir` is also included. Without OpenWrt DHCP configuration, the lease path defaults to `/tmp/dhcp.leases`, the domain to `lan`, and hosts short names are not expanded.
+
+Local records override older upstream cache entries; hosts take precedence over same-name DHCP leases. Expired leases are not served. Queries detect file/directory/configuration updates. Local replies have TTL 0, are not DNS-cached or periodically preloaded, and are shown as `Local Answer` with source `local-hosts` or `local-dhcp`. Blocking, address-family filtering and nftset rules still apply. If local data cannot be read or parsed, a rate-limited warning is logged and cache/upstream resolution continues. `use_local_resolv` controls upstream nameserver import only, not local records.
+
+### Upstream DNS Selection Strategy
+
+`query_strategy` accepts only `0`, `1`, or `2` and defaults to `0`; the former word-based values are not supported:
+
+- **Dynamic Scheduling (`0`)**: initially race the ordered upstream group, then normally reuse a responsive winner. After 50 single-upstream selections or 20 seconds since the previous evaluation, the next initial query reevaluates the group. There are no standalone background probes. Transport/invalid-response failures trigger reselection; this does not guarantee minimum latency.
+- **Strict Order (`1`)**: try referenced upstreams in order until a valid final response arrives.
+- **Concurrent Query (`2`)**: query selected upstreams concurrently and cancel remaining requests after the first valid final response.
+
+All three strategies support UDP/TCP/DoT/DoH and retain per-upstream timeouts, CNAME completion and cancellation. Optimal selection borrows the design described in the [dnsmasq manual](https://thekelleys.org.uk/dnsmasq/docs/dnsmasq-man.html) and [2.93 release](https://thekelleys.org.uk/dnsmasq/dnsmasq-2.93.tar.gz), without copying client-driven retries or protocol-specific differences. Upstream changes and explicit cache clear reset selection state.
+
+Valid cache hits do not query upstreams. Expired refreshes and preloads first reuse the entry's original winning upstream, bypassing normal group reevaluation. Only transport or invalid-response failures try the other current upstreams according to the selected strategy and update the cached path. Rule/service-binding changes revalidate routing rather than freezing an obsolete policy. Without a matching/fallback rule, use the complete upstream list, with local resolver upstreams first.
+
+All strategies follow the same response and caching rules:
 
 - **Response validity:** The response must have the response flag set and match the query ID, opcode, question name (case-insensitive), type, and class. Validity does not depend on RCODE: valid `NOERROR`, `NXDOMAIN`, `FORMERR`, `SERVFAIL`, `REFUSED`, `NOTIMP`, and other responses can all win. Error replies that omit Question still report their actual RCODE and question count for diagnostics.
 - **CNAME handling:** A `NOERROR` response must contain the requested record type, or a complete CNAME chain and its terminal result. For an incomplete CNAME chain, the terminal name is queried on the same upstream with the original rule, timeout budget, and cancellation signal, without rule re-matching. At most 16 hops are allowed, and loops across responses are detected. A referral with NS delegation but no SOA is not a terminal result; an `NXDOMAIN` must not contain terminal records of the requested type.
@@ -88,13 +105,13 @@ Both modes follow the same response and caching rules:
 
 Keys use lowercase fully qualified domain names and query types; A and AAAA remain independent. HitCount starts at 0 and increments for each valid cache hit, including CLI hits. Initial upstream queries, refreshes, and refresh waiters do not count as hits. Every replacement inherits the current count, including hits received during network I/O. Counts saturate rather than overflow and do not decay.
 
-EvictionPool is a bounded history with the same capacity as the cache. It stores only keys and HitCount, not DNS packets. Ordinary deletion, expired reclamation, and capacity eviction move counts into history. Repeated keys move to the tail; a full pool overwrites its oldest history record. Re-admission consumes the historical count; if history has been overwritten, the new entry starts at 0.
+No history is retained after deletion or eviction. Only replacements of still-existing entries inherit HitCount; re-admission after deletion or eviction starts at 0.
 
-The former 30-second periodic cleanup is removed. When admission needs space, reclaim all expired entries first, then evict the lowest HitCount. Ties favor eviction of the entry least recently hit by a client (insertion order for entries never hit). Background refresh does not improve this tie-break priority.
+No periodic expired cleanup runs. When admission needs space, evict exactly one entry with the lowest HitCount, without prioritizing expired entries. Ties evict the entry least recently hit by a client (insertion order for entries never hit). Background refresh does not improve this priority. Hot expired entries may therefore survive while cold valid entries are evicted.
 
 Expired entries remain available for scheduling and count inheritance, never for answering stale data. With preload disabled, expired entries can remain until capacity reclamation or a client query resolves them again. Cache size reports occupied entries, including expired ones, not only immediately usable answers.
 
-Cache and history are memory-only. Explicit clear, stop, restart, and OpenWrt configuration reload (implemented as restart) reset cache, history, and task state together; clear does not transfer all entries into history. Monotonic entry versions and clear epochs prevent old tasks from deleting or overwriting newer entries or resurrecting evicted/cleared entries.
+Cache is memory-only. Explicit clear, stop, restart, and OpenWrt configuration reload (implemented as restart) reset cache and task state. Monotonic entry versions and clear epochs prevent old tasks from deleting or overwriting newer entries or resurrecting evicted/cleared entries.
 
 #### Preload scheduling and shared queries
 
@@ -104,15 +121,15 @@ Every 100 ms, entries with at most 20% of their original lifetime remaining beco
 - Expired with a running preload: join its result as `Prefetch Hit`; return fresh data or failure, never expired data. This path means a refresh result was shared and does not increment cache HitCount. CLI and logs preserve the path.
 - Expired without a running preload, or absent: immediately resolve as `Upstream Query`, without consuming a background slot. Other clients and scans share that key's in-flight operation instead of issuing duplicate queries.
 
-Successful cacheable refreshes replace only their original entry version and inherit its count. A failed refresh, TTL 0 result, or uncacheable winning response (such as an error RCODE or an SOA-less negative answer) deletes that old version and moves its count into EvictionPool, even when the old answer still has valid lifetime. This intentionally sacrifices remaining validity; deleted entries are not periodically retried. Later client requests can resolve again and inherit history.
+Successful cacheable refreshes replace only their original version and inherit its count. On a failed refresh, TTL 0 or an uncacheable winner (error RCODE or SOA-less negative answer), preserve an unexpired old answer with its original expiry, path and count; retry at that expiry rather than every 100 ms. Delete an already expired old entry, without serving stale data or retaining counts. Deleted names are not retried in the background; a later client may resolve again, with a new cached entry starting at HitCount 0.
 
-Upstream TTL 0 answers, SOA-less NOERROR/NXDOMAIN responses, and error-RCODE responses are never cached or periodically preloaded. These winning responses are still delivered to waiters with their original RCODE. Negative lifetimes remain `min(SOA TTL, SOA.MINIMUM)`, further bounded by CNAME lifetimes. Upstream selection is unchanged. Eight background tasks can produce more than eight network requests through concurrent upstreams, CNAME follow-ups, or TCP retries; 100 ms is not a completion deadline.
+Upstream TTL 0 answers, SOA-less NOERROR/NXDOMAIN responses, and error-RCODE responses are never cached or periodically preloaded. These winning responses are still delivered to waiters with their original RCODE. Negative lifetimes remain `min(SOA TTL, SOA.MINIMUM)`, further bounded by CNAME lifetimes. Eight background tasks can produce more than eight network requests through concurrent upstreams, CNAME follow-ups, or TCP retries; 100 ms is not a completion deadline.
 
 Waiters receive independent copies of DNS results. Network I/O holds no cache or scheduling lock. Clear cancels existing tasks and wakes waiters; shutdown cancels and joins all resolution tasks and the scheduling loop.
 
 #### Data structures
 
-Hash lookup and indexed min-heaps track expiration, LFU eviction, 80% refresh deadlines, and ready-task expiration priority. EvictionPool uses a hash table and doubly linked list for O(1) history operations. Priority updates, insertion/deletion, and per-entry scheduling are O(log N); idle scans are O(1). Entries move to ready only when due, avoiding full-cache scans, sorting, and DNS record cloning every 100 ms. Deletion removes all indices, preventing unbounded stale heap nodes. Cache/history space is O(N), plus the actual shared in-flight query table.
+Hash lookup and three indexed min-heaps track LFU eviction, refresh deadlines and ready-task expiration priority. No expired-reclamation index or history pool remains. Priority updates, insertion/deletion and per-entry scheduling are O(log N); idle scans are O(1). Entries move to ready only when due, avoiding full-cache scans, sorting and DNS record cloning every 100 ms. Deletion removes all indices, preventing unbounded stale heap nodes. Cache space is O(N), plus the actual shared in-flight query table.
 
 A rule can also add the IP addresses of the endpoints of its referenced upstreams to the corresponding nftables sets. Hostnames (including DoH URL hostnames) are resolved to IPs and refreshed periodically; new addresses are added to the sets, and old addresses are not automatically removed from shared sets.
 
@@ -124,7 +141,7 @@ config updns 'general'
     option port '153'
     option use_local_resolv '1'
     option local_resolv_file '/tmp/resolv.conf.d/resolv.conf.auto'
-    option concurrent_query '0'
+    option query_strategy '0'
     option cache_enabled '1'
     option cache_size '4096'
     option active_preload '1'
@@ -157,14 +174,14 @@ The entry is **Services → UpDNS**, at route `/admin/services/updns`. The page 
 | Page area | UCI section / fields | Product behavior |
 |---|---|---|
 | Status | Service status, cache status file | Shows service status and cache entry count, refreshed periodically |
-| Settings & Port | `updns.general`: `enabled`, `port`, `use_local_resolv`, `local_resolv_file`, `concurrent_query` | Enable/disable service, listen port, local resolver, upstream query mode |
+| Settings & Port | `updns.general`: `enabled`, `port`, `use_local_resolv`, `local_resolv_file`, `query_strategy` | Enable/disable service, listen port, local resolver, resolution strategy |
 | Upstream DNS | `updns.upstream`: `name`, `address`, `protocol`, `timeout` | Manage UDP/TCP/DoT/DoH upstreams |
 | Domain Lists | `updns.domainlist`: `name`, `file` | Upload or manage list files referenced by rules |
 | Cache | `updns.general`: `cache_enabled`, `cache_size`, `active_preload` | Control cache, capacity, and active preload |
 | Logging | `updns.general`: `log_query`, `log_level` | Control query logging and log level |
 | Rules | `updns.rule`: `name`, `domain_match`, `domain_lists`, `upstreams`, `action`, `ipv4_nftsets`, `ipv6_nftsets`, `add_upstream_ips` | Set match conditions, upstreams, response type, and nftables handling |
 
-On a fresh install `enabled=0`, so the service does not start automatically. Defaults: port `153`, local resolver used, sequential queries, cache enabled with capacity `4096`, active preload enabled, query logging off.
+On a fresh install `enabled=0`, so the service does not start automatically. Defaults: port `153`, local resolver used, Dynamic Scheduling, cache enabled with capacity `4096`, active preload enabled, query logging off. The former `concurrent_query` field has no compatibility mapping: absence of `query_strategy` means `0` (Dynamic Scheduling). Former word-based values cause an error and must be replaced with their corresponding numbers before upgrading.
 
 The "Block" drop-down in the rule editor (No Blocking / NXDOMAIN Response / Zero-IP Response) is a UI control for the `action` field, not a separate UCI field: NXDOMAIN Response maps to `action='nxdomain'` and Zero-IP Response to `action='zeroip'`. Selecting either hides and clears the upstream, nftables set, and "And Return" options.
 

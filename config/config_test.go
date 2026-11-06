@@ -61,7 +61,7 @@ func TestSaveAndLoadUCI(t *testing.T) {
 		Port:            1153,
 		UseLocalResolv:  false,
 		LocalResolvFile: "/custom/resolv.conf",
-		ConcurrentQuery: true,
+		QueryStrategy:   StrategyConcurrent,
 		CacheEnabled:    false,
 		CacheSize:       4096,
 		ActivePreload:   false,
@@ -98,6 +98,9 @@ func TestSaveAndLoadUCI(t *testing.T) {
 
 	if loadedCfg.Port != cfg.Port {
 		t.Errorf("Port mismatch: expected %d, got %d", cfg.Port, loadedCfg.Port)
+	}
+	if loadedCfg.QueryStrategy != cfg.QueryStrategy || strings.Contains(savedText, "concurrent_query") {
+		t.Fatal("query strategy did not round trip or legacy option was serialized")
 	}
 	if loadedCfg.Enabled != cfg.Enabled {
 		t.Errorf("Enabled mismatch: expected %v, got %v", cfg.Enabled, loadedCfg.Enabled)
@@ -222,32 +225,28 @@ func TestLoadUCIUsesOnlyConfiguredUpstreams(t *testing.T) {
 }
 
 func TestLoadPackagedUCIHasNoImplicitUpstreams(t *testing.T) {
-	for _, name := range []string{"updns", "updns-E"} {
-		t.Run(name, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join("..", "openwrt", "updns", "root", "etc", "config", name))
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := filepath.Join(t.TempDir(), "updns")
-			data = []byte(strings.Replace(string(data), "option use_local_resolv '1'", "option use_local_resolv '0'", 1))
-			if err := os.WriteFile(path, data, 0600); err != nil {
-				t.Fatal(err)
-			}
-			cfg, err := LoadFromUCI(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := []UpstreamDNS{
-				{Name: "Tencent-UDP", Address: "119.29.29.29", Protocol: "udp", Timeout: 5},
-				{Name: "Google-DoH", Address: "https://dns.google/dns-query", Protocol: "doh", Timeout: 5},
-				{Name: "Cloudflare-DoH", Address: "https://one.one.one.one/dns-query", Protocol: "doh", Timeout: 5},
-				{Name: "Tencent-DoH", Address: "https://doh.pub/dns-query", Protocol: "doh", Timeout: 5},
-				{Name: "AdGuard-DoH", Address: "https://unfiltered.adguard-dns.com/dns-query", Protocol: "doh", Timeout: 5},
-			}
-			if !reflect.DeepEqual(cfg.UpstreamDNS, want) {
-				t.Fatalf("got upstreams %#v, want %#v", cfg.UpstreamDNS, want)
-			}
-		})
+	data, err := os.ReadFile(filepath.Join("..", "openwrt", "updns", "root", "etc", "config", "updns"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "updns")
+	data = []byte(strings.Replace(string(data), "option use_local_resolv '1'", "option use_local_resolv '0'", 1))
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFromUCI(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []UpstreamDNS{
+		{Name: "Tencent-UDP", Address: "119.29.29.29", Protocol: "udp", Timeout: 5},
+		{Name: "Google-DoH", Address: "https://dns.google/dns-query", Protocol: "doh", Timeout: 5},
+		{Name: "Cloudflare-DoH", Address: "https://one.one.one.one/dns-query", Protocol: "doh", Timeout: 5},
+		{Name: "Tencent-DoH", Address: "https://doh.pub/dns-query", Protocol: "doh", Timeout: 5},
+		{Name: "AdGuard-DoH", Address: "https://unfiltered.adguard-dns.com/dns-query", Protocol: "doh", Timeout: 5},
+	}
+	if !reflect.DeepEqual(cfg.UpstreamDNS, want) {
+		t.Fatalf("got upstreams %#v, want %#v", cfg.UpstreamDNS, want)
 	}
 }
 
