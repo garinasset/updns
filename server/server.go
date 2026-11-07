@@ -98,7 +98,20 @@ const cacheStatusPath = "/tmp/updns_cache_size"
 const upstreamNFTRefreshInterval = 5 * time.Minute
 const upstreamNFTRetryInterval = 30 * time.Second
 const localResolverWatchInterval = 5 * time.Second
-const preloadConcurrency = 8
+
+func preloadConcurrency(cacheSize int) int {
+	concurrency := cacheSize / 128
+	if cacheSize%128 != 0 {
+		concurrency++
+	}
+	if concurrency < 16 {
+		return 16
+	}
+	if concurrency > 64 {
+		return 64
+	}
+	return concurrency
+}
 
 type nftSetManager interface {
 	AddIPsToSet([]string, string) error
@@ -569,10 +582,11 @@ func (s *Server) preloadLoop() {
 func (s *Server) preloadCacheEntries() {
 	s.queryMu.Lock()
 	defer s.queryMu.Unlock()
-	if s.cache == nil || s.ctx.Err() != nil || s.preloading >= preloadConcurrency {
+	limit := preloadConcurrency(s.cfg.CacheSize)
+	if s.cache == nil || s.ctx.Err() != nil || s.preloading >= limit {
 		return
 	}
-	entries, epoch := s.cache.TakePreloads(preloadConcurrency - s.preloading)
+	entries, epoch := s.cache.TakePreloads(limit - s.preloading)
 	for _, entry := range entries {
 		key := fmt.Sprintf("%s:%d", entry.Query, entry.QueryType)
 		if s.flights[key] == nil {
@@ -622,7 +636,7 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				logResult = s.queryMetadata(domain, queryType)
 				logResult.Rcode = dns.RcodeServerFailure
 			}
-			logging.Infof("%s", FormatQueryLog("SRV Query", logResult, client, ecs))
+			logging.Infof("%s", FormatQueryLog("SRV", logResult, client, ecs))
 		}
 		if err != nil {
 			m.SetRcode(r, dns.RcodeServerFailure)
@@ -636,7 +650,7 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-// FormatQueryLog renders one query log line with " | " separated columns.
+// FormatQueryLog renders one query log line with optional client and ECS fields.
 func FormatQueryLog(kind string, result *QueryResult, client, ecs string) string {
 	path := result.Path()
 	rcode := result.Rcode
@@ -647,23 +661,28 @@ func FormatQueryLog(kind string, result *QueryResult, client, ecs string) string
 	if !ok {
 		rcodeText = fmt.Sprintf("RCODE%d", rcode)
 	}
-	return fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s",
+	line := fmt.Sprintf("QUERY [%s] %s %-4s → %s → %s → %s",
 		kind,
 		result.Domain,
 		result.QueryType,
-		logValue("", result.MatchedRule),
+		logValue(result.MatchedRule),
 		path,
 		rcodeText,
-		logValue("client@", client),
-		logValue("ecs@", ecs),
 	)
+	if client != "" {
+		line += " @" + client
+	}
+	if ecs != "" {
+		line += " #" + ecs
+	}
+	return line
 }
 
-func logValue(prefix, value string) string {
+func logValue(value string) string {
 	if value == "" {
 		return "-"
 	}
-	return prefix + value
+	return value
 }
 
 func clientSubnet(message *dns.Msg) string {

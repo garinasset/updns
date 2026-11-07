@@ -258,7 +258,7 @@ func logStandaloneQueries(enabled bool, domain string, results []*server.QueryRe
 	}
 
 	for _, result := range results {
-		if err := writer.Info(server.FormatQueryLog("CLI Query", result, "", "")); err != nil {
+		if err := writer.Info(server.FormatQueryLog("CLI", result, "", "")); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: cannot write standalone query to system log: %v\n", err)
 			return
 		}

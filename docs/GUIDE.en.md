@@ -111,11 +111,11 @@ No periodic expired cleanup runs. When admission needs space, evict exactly one 
 
 Expired entries remain available for scheduling and count inheritance, never for answering stale data. With preload disabled, expired entries can remain until capacity reclamation or a client query resolves them again. Cache size reports occupied entries, including expired ones, not only immediately usable answers.
 
-Cache is memory-only. Explicit clear, stop, restart, and OpenWrt configuration reload (implemented as restart) reset cache and task state. Monotonic entry versions and clear epochs prevent old tasks from deleting or overwriting newer entries or resurrecting evicted/cleared entries.
+The cache is memory-only and is not persisted across processes. An explicit clear removes cached entries and invalidates in-flight task results; stopping waits for service tasks to finish and clears the cache; restart and OpenWrt configuration reload (which takes the restart path when enabled) discard the old process cache, and the new process starts with an empty cache. Entry-version and clear-epoch markers are only for concurrency control within one process: they prevent old tasks from deleting or overwriting newer entries or reinserting evicted or cleared entries. They are not cache-data versions and are not used to persist or restore the cache. Clearing removes references held by the cache structures, but in-flight tasks that have not finished may temporarily retain related objects; those objects become eligible for Go garbage collection only after all references are gone. Garbage collection does not guarantee that heap memory is immediately returned to the operating system, so clearing while the process remains alive does not guarantee an immediate drop in process memory usage. When the service process exits, its memory is reclaimed by the operating system.
 
 #### Preload scheduling and shared queries
 
-Every 100 ms, entries with at most 20% of their original lifetime remaining become pending, including expired entries. Pending excludes in-flight tasks. Select the earliest original expiration first and fill free slots up to 8 global background tasks. Slow tasks do not block later scans. Preload does not filter entries by HitCount or recent demand.
+Every 100 ms, entries with at most 20% of their original lifetime remaining become pending, including expired entries. Pending excludes in-flight tasks. Select the earliest original expiration first and fill free slots up to `max(16, min(ceil(cache_size / 128), 64))` global background tasks, based on the configured cache capacity. The default capacity of 4096 gives a limit of 32. Slow tasks do not block later scans. Preload does not filter entries by HitCount or recent demand.
 
 - Unexpired: immediately return decremented TTLs as `Cache Hit`.
 - Expired with a running preload: join its result as `Prefetch Hit`; return fresh data or failure, never expired data. This path means a refresh result was shared and does not increment cache HitCount. CLI and logs preserve the path.
@@ -123,7 +123,7 @@ Every 100 ms, entries with at most 20% of their original lifetime remaining beco
 
 Successful cacheable refreshes replace only their original version and inherit its count. On a failed refresh, TTL 0 or an uncacheable winner (error RCODE or SOA-less negative answer), preserve an unexpired old answer with its original expiry, path and count; retry at that expiry rather than every 100 ms. Delete an already expired old entry, without serving stale data or retaining counts. Deleted names are not retried in the background; a later client may resolve again, with a new cached entry starting at HitCount 0.
 
-Upstream TTL 0 answers, SOA-less NOERROR/NXDOMAIN responses, and error-RCODE responses are never cached or periodically preloaded. These winning responses are still delivered to waiters with their original RCODE. Negative lifetimes remain `min(SOA TTL, SOA.MINIMUM)`, further bounded by CNAME lifetimes. Eight background tasks can produce more than eight network requests through concurrent upstreams, CNAME follow-ups, or TCP retries; 100 ms is not a completion deadline.
+Upstream TTL 0 answers, SOA-less NOERROR/NXDOMAIN responses, and error-RCODE responses are never cached or periodically preloaded. These winning responses are still delivered to waiters with their original RCODE. Negative lifetimes remain `min(SOA TTL, SOA.MINIMUM)`, further bounded by CNAME lifetimes. Background tasks can produce more network requests than the task limit through concurrent upstreams, CNAME follow-ups, or TCP retries; 100 ms is not a completion deadline.
 
 Waiters receive independent copies of DNS results. Network I/O holds no cache or scheduling lock. Clear cancels existing tasks and wakes waiters; shutdown cancels and joins all resolution tasks and the scheduling loop.
 
@@ -283,7 +283,7 @@ The service is managed by OpenWrt init/procd. `general.enabled` defaults to `0`;
 - `reload`
   - with `general.enabled=1`, goes through the restart path;
   - with `general.enabled=0`, goes through the stop path.
-- `stop` stops the service process (the cache is released when the process exits) and, after the process has stopped, clears the nftables sets referenced by the current configuration.
+- `stop` stops the service process; when it exits, its in-process cache no longer exists and its memory is reclaimed by the operating system. The init script then clears the nftables sets referenced by the current configuration.
 
 Saving and applying configuration in LuCI triggers `reload`.
 
@@ -352,7 +352,7 @@ UpDNS's regular logs are collected by procd and can be viewed with `logread`. Pe
 
 A winning valid DNS response (including upstream error RCODEs such as `SERVFAIL` or `REFUSED`, and SOA-less negative responses) does not produce a query-failure warning; with `log_query` enabled it is logged as a regular per-query line with its actual RCODE. Only when no upstream yields a valid final response (timeouts, question mismatches, referrals, truncation, failed CNAME follow-ups, and so on) does the existing failure-logging policy emit a warning listing each upstream's specific cause.
 
-With "Log Queries" enabled and `add_subnet` configured in dnsmasq, the log can record `client` and `ecs`.
+Per-query lines identify the source as `QUERY [CLI]` or `QUERY [SRV]`, followed by the domain, query type, matched rule, query path, and DNS response code; an unmatched rule is shown as `-`. Server queries append `@client-address` when a client address is available and `#subnet` when EDNS Client Subnet (ECS) is present. Missing fields are omitted, so CLI queries have no client or ECS placeholders. dnsmasq can supply ECS when `add_subnet` is configured.
 
 ## Project Structure
 

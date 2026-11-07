@@ -468,23 +468,63 @@ func TestFormatQueryLog(t *testing.T) {
 	}{
 		{
 			name:   "server cache hit",
-			kind:   "SRV Query",
+			kind:   "SRV",
 			result: QueryResult{Domain: "qq.com.", QueryType: "A", CacheHit: true, MatchedRule: "默认"},
 			client: "127.0.0.1", ecs: "127.0.0.1/32",
-			want: "SRV Query | qq.com. | A | 默认 | Cache Hit | NOERROR | client@127.0.0.1 | ecs@127.0.0.1/32",
+			want: "QUERY [SRV] qq.com. A    → 默认 → Cache Hit → NOERROR @127.0.0.1 #127.0.0.1/32",
 		},
 		{
 			name:   "nxdomain rule without ecs",
-			kind:   "SRV Query",
+			kind:   "SRV",
 			result: QueryResult{Domain: "ads.example.com.", QueryType: "A", MatchedRule: "adblock", Action: "nxdomain", Rcode: dns.RcodeNameError},
 			client: "192.168.1.23",
-			want:   "SRV Query | ads.example.com. | A | adblock | NXDOMAIN RULE | NXDOMAIN | client@192.168.1.23 | -",
+			want:   "QUERY [SRV] ads.example.com. A    → adblock → NXDOMAIN RULE → NXDOMAIN @192.168.1.23",
 		},
 		{
 			name:   "cli failure",
-			kind:   "CLI Query",
+			kind:   "CLI",
 			result: QueryResult{Domain: "baidu.jp.", QueryType: "AAAA", MatchedRule: "JP Access", Error: "x"},
-			want:   "CLI Query | baidu.jp. | AAAA | JP Access | Upstream Query | SERVFAIL | - | -",
+			want:   "QUERY [CLI] baidu.jp. AAAA → JP Access → Upstream Query → SERVFAIL",
+		},
+		{
+			name:   "cli cache hit",
+			kind:   "CLI",
+			result: QueryResult{Domain: "www.qq.com.", QueryType: "A", MatchedRule: "CN Access", CacheHit: true},
+			want:   "QUERY [CLI] www.qq.com. A    → CN Access → Cache Hit → NOERROR",
+		},
+		{
+			name:   "cli AAAA cache hit",
+			kind:   "CLI",
+			result: QueryResult{Domain: "www.qq.com.", QueryType: "AAAA", MatchedRule: "CN Access", CacheHit: true},
+			want:   "QUERY [CLI] www.qq.com. AAAA → CN Access → Cache Hit → NOERROR",
+		},
+		{
+			name:   "server A cache hit",
+			kind:   "SRV",
+			result: QueryResult{Domain: "dns.google.", QueryType: "A", MatchedRule: "CN Access", CacheHit: true},
+			client: "127.0.0.1", ecs: "127.0.0.1/32",
+			want: "QUERY [SRV] dns.google. A    → CN Access → Cache Hit → NOERROR @127.0.0.1 #127.0.0.1/32",
+		},
+		{
+			name:   "server AAAA cache hit",
+			kind:   "SRV",
+			result: QueryResult{Domain: "dns.google.", QueryType: "AAAA", MatchedRule: "CN Access", CacheHit: true},
+			client: "127.0.0.1", ecs: "127.0.0.1/32",
+			want: "QUERY [SRV] dns.google. AAAA → CN Access → Cache Hit → NOERROR @127.0.0.1 #127.0.0.1/32",
+		},
+		{
+			name:   "server IPv6 client and ecs",
+			kind:   "SRV",
+			result: QueryResult{Domain: "dns.google.", QueryType: "AAAA", MatchedRule: "CN Access", CacheHit: true},
+			client: "2001:db8::1", ecs: "2001:db8::/32",
+			want: "QUERY [SRV] dns.google. AAAA → CN Access → Cache Hit → NOERROR @2001:db8::1 #2001:db8::/32",
+		},
+		{
+			name:   "ecs without client or matching rule",
+			kind:   "SRV",
+			result: QueryResult{Domain: "example.com.", QueryType: "HTTPS", Rcode: 99},
+			ecs:    "192.0.2.0/24",
+			want:   "QUERY [SRV] example.com. HTTPS → - → Upstream Query → RCODE99 #192.0.2.0/24",
 		},
 	}
 
@@ -592,12 +632,40 @@ func TestPreloadRefreshesNearExpiryCacheEntry(t *testing.T) {
 	}
 }
 
+func TestPreloadConcurrency(t *testing.T) {
+	tests := []struct {
+		cacheSize int
+		want      int
+	}{
+		{1, 16}, {128, 16}, {2048, 16}, {2049, 17},
+		{2176, 17}, {2177, 18}, {4096, 32}, {8064, 63},
+		{8065, 64}, {8192, 64}, {8193, 64}, {int(^uint(0) >> 1), 64},
+	}
+	for _, tt := range tests {
+		if got := preloadConcurrency(tt.cacheSize); got != tt.want {
+			t.Errorf("preloadConcurrency(%d) = %d, want %d", tt.cacheSize, got, tt.want)
+		}
+	}
+}
+
 func TestPreloadUsesBoundedConcurrentWorkers(t *testing.T) {
+	for _, tt := range []struct {
+		cacheSize int
+		limit     int
+	}{{2048, 16}, {2049, 17}, {4096, 32}, {8193, 64}} {
+		t.Run(fmt.Sprint(tt.cacheSize), func(t *testing.T) {
+			testPreloadUsesBoundedConcurrentWorkers(t, tt.cacheSize, tt.limit)
+		})
+	}
+}
+
+func testPreloadUsesBoundedConcurrentWorkers(t *testing.T, cacheSize, limit int) {
+	t.Helper()
 	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := make(chan struct{}, 2*preloadConcurrency)
+	started := make(chan struct{}, 2*limit)
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
@@ -621,6 +689,7 @@ func TestPreloadUsesBoundedConcurrentWorkers(t *testing.T) {
 	go func() { _ = upstream.ActivateAndServe() }()
 	defer func() { unblock(); _ = upstream.Shutdown() }()
 	cfg := config.DefaultConfig()
+	cfg.CacheSize = cacheSize
 	cfg.UseLocalResolv = false
 	cfg.UpstreamDNS = []config.UpstreamDNS{{Name: "test", Protocol: "udp", Address: packetConn.LocalAddr().String(), Timeout: 5}}
 	srv, err := NewServer(cfg)
@@ -632,7 +701,7 @@ func TestPreloadUsesBoundedConcurrentWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	for i := 0; i < 2*preloadConcurrency; i++ {
+	for i := 0; i < 2*limit; i++ {
 		name := fmt.Sprintf("preload%d.example.", i)
 		srv.cache.Set(name+":1", &cache.CacheEntry{
 			Query: name, QueryType: dns.TypeA, TTL: 120,
@@ -641,7 +710,7 @@ func TestPreloadUsesBoundedConcurrentWorkers(t *testing.T) {
 	}
 	srv.preloadCacheEntries()
 	defer func() { unblock(); srv.queryWG.Wait() }()
-	for i := 0; i < preloadConcurrency; i++ {
+	for i := 0; i < limit; i++ {
 		select {
 		case <-started:
 		case <-time.After(2 * time.Second):
@@ -1112,7 +1181,7 @@ func TestStopCancelsActivePreload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := make(chan struct{}, preloadConcurrency)
+	started := make(chan struct{}, 1)
 	upstream := &dns.Server{
 		PacketConn: packetConn,
 		Handler: dns.HandlerFunc(func(dns.ResponseWriter, *dns.Msg) {

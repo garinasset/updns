@@ -323,7 +323,7 @@ func TestClearCancelsWaitersAndPreventsResurrection(t *testing.T) {
 
 func TestPrefetchWaitLog(t *testing.T) {
 	result := &QueryResult{Domain: "wait.example.", QueryType: "A", PrefetchWait: true}
-	if got := FormatQueryLog("SRV Query", result, "", ""); !strings.Contains(got, "| Prefetch Hit |") {
+	if got := FormatQueryLog("SRV", result, "", ""); !strings.Contains(got, "→ Prefetch Hit →") {
 		t.Fatalf("missing waiting path: %s", got)
 	}
 }

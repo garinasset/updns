@@ -147,7 +147,7 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 	results, err := s.QueryDomain(request.Domain)
 	if s.logQuery {
 		for _, result := range results {
-			logging.Infof("%s", FormatQueryLog("CLI Query", result, "", ""))
+			logging.Infof("%s", FormatQueryLog("CLI", result, "", ""))
 		}
 	}
 	response := controlResponse{Results: results}
