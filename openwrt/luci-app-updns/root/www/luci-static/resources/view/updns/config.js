@@ -841,6 +841,7 @@ return view.extend({
 		s = m.section(form.GridSection, 'domainlist', _('Domain Lists'));
 		s.addremove = true;
 		s.anonymous = true;
+		s.sortable = true;
 		o = s.option(form.Value, 'name', _('Domain List Name'),
 			_('A unique identifier shown in rule selectors.'));
 		o.rmempty = false;

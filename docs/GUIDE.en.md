@@ -49,6 +49,8 @@ A DoH address must be a full HTTPS URL. For an IPv6 address with a port, use bra
 
 A list entry consists of a unique name and a file path; rules reference the file through the list name. Matching is case-insensitive; blank lines and lines starting with `#` are ignored.
 
+In LuCI, drag the sort button in each domain list row's action column to reorder the lists, then click "Save" or "Save & Apply" to persist the order. Reordering domain lists does not change rule references or matching priority; priority is still determined by the rule order.
+
 A plain domain matches the exact domain and its subdomains: `example.com` matches `example.com` and `www.example.com`, but not `superexample.com`. A leading `*` changes this: `*example.com` matches `example.com`, `www.example.com`, and also `superexample.com`.
 
 Each list builds a compressed reverse trie at load time. Queries follow domain suffixes instead of scanning every pattern; rules retain configuration order and matching results are not separately cached.
