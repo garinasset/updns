@@ -3,12 +3,12 @@ package rules
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestMatchExact(t *testing.T) {
 	m := NewMatcher()
-	m.LoadDomainList("test_list.txt")
 
 	tests := []struct {
 		domain   string
@@ -22,7 +22,7 @@ func TestMatchExact(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := m.matchPattern(tt.domain, tt.pattern)
+		result := matchIndexed(m, tt.domain, tt.pattern)
 		if result != tt.expected {
 			t.Errorf("matchPattern(%q, %q) = %v, want %v", tt.domain, tt.pattern, result, tt.expected)
 		}
@@ -46,7 +46,7 @@ func TestMatchWildcard(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := m.matchPattern(tt.domain, tt.pattern)
+		result := matchIndexed(m, tt.domain, tt.pattern)
 		if result != tt.expected {
 			t.Errorf("matchPattern(%q, %q) = %v, want %v", tt.domain, tt.pattern, result, tt.expected)
 		}
@@ -67,7 +67,7 @@ func TestMatchCaseInsensitive(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := m.matchPattern(tt.domain, tt.pattern)
+		result := matchIndexed(m, tt.domain, tt.pattern)
 		if result != tt.expected {
 			t.Errorf("matchPattern(%q, %q) = %v, want %v", tt.domain, tt.pattern, result, tt.expected)
 		}
@@ -78,8 +78,8 @@ func TestMatchMultipleListsOR(t *testing.T) {
 	m := NewMatcher()
 
 	// Create test patterns directly
-	m.domainLists["list1"] = []string{"example.com"}
-	m.domainLists["list2"] = []string{"test.com"}
+	m.domainLists["list1"] = testIndex("example.com")
+	m.domainLists["list2"] = testIndex("test.com")
 
 	if !m.MatchMultipleListsOR("example.com", []string{"list1", "list2"}) {
 		t.Error("Expected to match in list1")
@@ -97,17 +97,39 @@ func TestMatchMultipleListsOR(t *testing.T) {
 func TestMatchMultipleListsAND(t *testing.T) {
 	m := NewMatcher()
 
-	m.domainLists["list1"] = []string{"example.com"}
-	m.domainLists["list2"] = []string{"example.com"}
+	m.domainLists["list1"] = testIndex("example.com")
+	m.domainLists["list2"] = testIndex("example.com")
 
 	if !m.MatchMultipleListsAND("example.com", []string{"list1", "list2"}) {
 		t.Error("Expected to match in both lists")
 	}
 
-	m.domainLists["list2"] = []string{"test.com"}
+	m.domainLists["list2"] = testIndex("test.com")
 	if m.MatchMultipleListsAND("example.com", []string{"list1", "list2"}) {
 		t.Error("Expected not to match in both lists")
 	}
+}
+
+func testIndex(patterns ...string) *domainIndex {
+	index := new(domainIndex)
+	for _, pattern := range patterns {
+		index.add(pattern)
+	}
+	return index
+}
+
+func matchIndexed(m *Matcher, domain, pattern string) bool {
+	m.domainLists["test"] = testIndex(pattern)
+	return m.Match(domain, "test")
+}
+
+func linearMatch(domain, pattern string) bool {
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	pattern = strings.ToLower(strings.TrimSuffix(pattern, "."))
+	if strings.HasPrefix(pattern, "*") {
+		return strings.HasSuffix(domain, pattern[1:])
+	}
+	return domain == pattern || strings.HasSuffix(domain, "."+pattern)
 }
 
 func TestLoadDomainListAsUsesConfiguredName(t *testing.T) {

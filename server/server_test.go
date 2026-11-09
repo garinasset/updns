@@ -796,7 +796,7 @@ func TestResolveQueryNXDOMAINRuleDoesNotQueryUpstream(t *testing.T) {
 	}
 }
 
-func TestQueryZeroIPRuleCachesWithoutUpstream(t *testing.T) {
+func TestQueryZeroIPRuleBypassesCacheWithoutUpstream(t *testing.T) {
 	listPath := filepath.Join(t.TempDir(), "blocked.txt")
 	if err := os.WriteFile(listPath, []byte("blocked.example\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -821,15 +821,18 @@ func TestQueryZeroIPRuleCachesWithoutUpstream(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.CacheHit != (pass == 1) || result.Rcode != dns.RcodeSuccess ||
+			if result.CacheHit || result.PrefetchWait || result.TTL != localAnswerTTL || result.Path() != "ZERO-IP RULE" || result.Rcode != dns.RcodeSuccess ||
 				len(result.Answers) != 1 || result.Answers[0] != want {
 				t.Fatalf("type %d pass %d: unexpected result %#v", qtype, pass, result)
+			}
+			if srv.GetCacheSize() != 0 {
+				t.Fatal("zero-IP rule response entered cache")
 			}
 		}
 	}
 }
 
-func TestQueryNXDOMAINRuleIsCached(t *testing.T) {
+func TestQueryNXDOMAINRuleBypassesCache(t *testing.T) {
 	listPath := filepath.Join(t.TempDir(), "blocked.txt")
 	if err := os.WriteFile(listPath, []byte("blocked.example\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -851,8 +854,11 @@ func TestQueryNXDOMAINRuleIsCached(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.CacheHit != (pass == 1) || result.Rcode != dns.RcodeNameError {
+		if result.CacheHit || result.PrefetchWait || result.TTL != localAnswerTTL || result.Path() != "NXDOMAIN RULE" || result.Rcode != dns.RcodeNameError {
 			t.Fatalf("pass %d: unexpected result %#v", pass, result)
+		}
+		if srv.GetCacheSize() != 0 {
+			t.Fatal("NXDOMAIN rule response entered cache")
 		}
 	}
 }

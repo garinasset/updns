@@ -501,6 +501,10 @@ func (s *Server) queryFrom(domain string, queryType uint16, client string) (*Que
 func (s *Server) queryRouted(domain string, queryType uint16, client string) (*QueryResult, error) {
 	cacheKey := fmt.Sprintf("%s:%d", domain, queryType)
 	route := s.routeFor(domain)
+	if route.rule != nil && isLocalAnswerAction(route.rule.Action) {
+		s.discardLocalCache(domain, queryType)
+		return s.resolveQueryDetailContext(s.ctx, domain, queryType, client)
+	}
 	s.queryMu.Lock()
 	if err := s.ctx.Err(); err != nil {
 		s.queryMu.Unlock()
@@ -589,8 +593,16 @@ func (s *Server) preloadCacheEntries() {
 	entries, epoch := s.cache.TakePreloads(limit - s.preloading)
 	for _, entry := range entries {
 		key := fmt.Sprintf("%s:%d", entry.Query, entry.QueryType)
+		route := s.routeFor(entry.Query)
+		if route.rule != nil && isLocalAnswerAction(route.rule.Action) {
+			s.cache.Remove(key)
+			if s.started {
+				s.publishCacheSize()
+			}
+			continue
+		}
 		if s.flights[key] == nil {
-			s.startQueryLocked(key, entry.Query, entry.QueryType, "", s.routeFor(entry.Query).signature, entry, epoch, true)
+			s.startQueryLocked(key, entry.Query, entry.QueryType, "", route.signature, entry, epoch, true)
 		}
 	}
 }

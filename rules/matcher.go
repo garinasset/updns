@@ -10,13 +10,13 @@ import (
 
 // Matcher handles domain matching logic similar to dnsmasq
 type Matcher struct {
-	domainLists map[string][]string // filename -> list of domains
+	domainLists map[string]*domainIndex
 }
 
 // NewMatcher creates a new domain matcher
 func NewMatcher() *Matcher {
 	return &Matcher{
-		domainLists: make(map[string][]string),
+		domainLists: make(map[string]*domainIndex),
 	}
 }
 
@@ -38,21 +38,21 @@ func (m *Matcher) LoadDomainListAs(name, filename string) error {
 	}
 	defer file.Close()
 
-	domains := []string{}
+	index := new(domainIndex)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		domains = append(domains, line)
+		index.add(line)
 	}
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading domain list %s: %w", absPath, err)
 	}
 
-	m.domainLists[name] = domains
+	m.domainLists[name] = index
 	return nil
 }
 
@@ -63,7 +63,7 @@ func (m *Matcher) ClearDomainList(filename string) {
 
 // ClearAllDomainLists removes all domain lists from memory
 func (m *Matcher) ClearAllDomainLists() {
-	m.domainLists = make(map[string][]string)
+	m.domainLists = make(map[string]*domainIndex)
 }
 
 // Match checks if a domain matches any pattern in a domain list.
@@ -73,29 +73,13 @@ func (m *Matcher) ClearAllDomainLists() {
 //   - "*example.com" matches any domain ending in "example.com", including
 //     "example.com", "www.example.com" and "superexample.com"
 func (m *Matcher) Match(domain, listName string) bool {
-	patterns, exists := m.domainLists[listName]
+	index, exists := m.domainLists[listName]
 	if !exists {
 		return false
 	}
 
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
-	for _, pattern := range patterns {
-		if m.matchPattern(domain, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-// matchPattern matches a domain against a pattern
-func (m *Matcher) matchPattern(domain, pattern string) bool {
-	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
-	pattern = strings.ToLower(strings.TrimSuffix(pattern, "."))
-
-	if strings.HasPrefix(pattern, "*") {
-		return strings.HasSuffix(domain, pattern[1:])
-	}
-	return domain == pattern || strings.HasSuffix(domain, "."+pattern)
+	return index.match(strings.TrimSuffix(domain, "."))
 }
 
 // MatchMultipleListsOR checks if domain matches any of the given lists (OR logic)

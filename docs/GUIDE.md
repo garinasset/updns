@@ -8,9 +8,9 @@
 
 ## 产品概览
 
-UpDNS 是一个 OpenWrt 的 DNS 服务。它通过 UDP/TCP 接收查询，根据域名列表规则选择上游 DNS，并可将解析地址写入指定 nftables set。
+UpDNS 是一款面向 OpenWrt 的 DNS 服务，通过域名规则灵活管理 DNS 解析，并支持将解析结果写入 nftables set。
 
-支持的上游协议：UDP、TCP、DNS over TLS（DoT）和 DNS over HTTPS（DoH）。可单独使用 UpDNS，也可将它配置为 dnsmasq 等 DNS 转发器的上游。
+支持 UDP、TCP、DoT 和 DoH，可独立运行，也可作为 dnsmasq 等 DNS 转发器的上游。
 
 主要能力：
 
@@ -52,6 +52,8 @@ DoH 地址须为完整 HTTPS URL。IPv6 地址带端口时使用方括号，例�
 域名匹配时会匹配精确域名及其子域名，
 `example.com` 可以匹配 `example.com` 和 `www.example.com`，但不能匹配 `superexample.com`；通过在开头添加 `*` 可以改变这一行为：`*example.com` 可以匹配 `example.com`、`www.example.com`，以及 `superexample.com`。
 
+每份列表加载时构建压缩反向 Trie 索引，查询按域名后缀查找，不逐条扫描列表；规则仍按配置顺序评估，不额外缓存匹配结果。
+
 ### 规则行为
 
 规则按顺序评估，命中第一条适用规则即停止。一个规则可引用多个域名列表，命中其中任一个列表即满足域名条件。LuCI 支持拖动普通规则排序；在规则的“如果域名匹配”下拉框中选择“不执行匹配（兜底规则）”（对应 `domain_match='0'`），该规则将被视为兜底规则，兜底规则最多一条且总是在普通规则之后执行。如果没有兜底规则, 且请求未命中任何普通规则时，使用默认上游。
@@ -61,10 +63,10 @@ DoH 地址须为完整 HTTPS URL。IPv6 地址带端口时使用方括号，例�
 | `ipv4+ipv6` | 返回 IPv4 和 IPv6 结果 |
 | `ipv4only` | 仅返回 IPv4 结果 |
 | `ipv6only` | 仅返回 IPv6 结果 |
-| `nxdomain` | 直接返回 NXDOMAIN，不查询上游，缓存该响应 |
-| `zeroip` | Zero-IP 拦截：A 查询返回 `0.0.0.0`，AAAA 查询返回 `::`，不查询上游，缓存该响应 |
+| `nxdomain` | 直接返回 NXDOMAIN，不查询上游，不缓存该响应 |
+| `zeroip` | Zero-IP 拦截：A 查询返回 `0.0.0.0`，AAAA 查询返回 `::`，不查询上游，不缓存该响应 |
 
-`nxdomain` 与 `zeroip` 响应的缓存 TTL 固定为 60 秒，且不写入 nftables set。
+`nxdomain` 与 `zeroip` 规则应答绕过 UpDNS 缓存读写和周期预取，且不写入 nftables set；保留原有应答内容及 TTL 语义（零地址记录 TTL 为 60 秒，NXDOMAIN 不附加 SOA）。CLI/日志始终显示 `NXDOMAIN RULE` 或 `ZERO-IP RULE`，而非缓存命中。上游返回的 NXDOMAIN 仍按原有负缓存规则处理。
 
 `ipv4+ipv6`、`ipv4only`、`ipv6only` 只过滤 A/AAAA 记录；MX、TXT、NS、SOA、SRV、PTR 等非地址记录及 CNAME 原样返回。HTTPS/SVCB 记录照常返回，`alpn`、`ech` 等参数保留。
 

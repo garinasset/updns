@@ -51,6 +51,8 @@ A list entry consists of a unique name and a file path; rules reference the file
 
 A plain domain matches the exact domain and its subdomains: `example.com` matches `example.com` and `www.example.com`, but not `superexample.com`. A leading `*` changes this: `*example.com` matches `example.com`, `www.example.com`, and also `superexample.com`.
 
+Each list builds a compressed reverse trie at load time. Queries follow domain suffixes instead of scanning every pattern; rules retain configuration order and matching results are not separately cached.
+
 ### Rule Behavior
 
 Rules are evaluated in order and evaluation stops at the first applicable match. A rule may reference multiple domain lists; matching any one of them satisfies the domain condition. LuCI supports drag-and-drop ordering of regular rules; selecting "Do Not Match (Fallback Rule)" in the rule's "If the Domain Matches" drop-down (`domain_match='0'`) makes it a fallback rule. There can be at most one fallback rule and it always runs after the regular rules.
@@ -60,10 +62,10 @@ Rules are evaluated in order and evaluation stops at the first applicable match.
 | `ipv4+ipv6` | Return both IPv4 and IPv6 results |
 | `ipv4only` | Return IPv4 results only |
 | `ipv6only` | Return IPv6 results only |
-| `nxdomain` | Return NXDOMAIN directly, without querying upstreams; the response is cached |
-| `zeroip` | Zero-IP Blocking: return `0.0.0.0` for A queries and `::` for AAAA queries, without querying upstreams; the response is cached |
+| `nxdomain` | Return NXDOMAIN directly, without querying upstreams or caching the response |
+| `zeroip` | Zero-IP Blocking: return `0.0.0.0` for A queries and `::` for AAAA queries, without querying upstreams or caching the response |
 
-Responses of `nxdomain` and `zeroip` are cached with a fixed TTL of 60 seconds and are not written to nftables sets.
+Rule-generated `nxdomain` and `zeroip` answers bypass UpDNS cache reads, writes and periodic preload, and are not written to nftables sets. Existing response contents and TTL semantics are preserved (zero-IP records have TTL 60; rule NXDOMAIN has no SOA). CLI/log paths remain `NXDOMAIN RULE` or `ZERO-IP RULE`, never cache hits. Upstream NXDOMAIN responses retain the existing negative-cache behavior.
 
 The `ipv4+ipv6`, `ipv4only`, and `ipv6only` actions filter only A/AAAA records; MX, TXT, NS, SOA, SRV, PTR, and other non-address records, as well as CNAMEs, are returned verbatim. HTTPS/SVCB records are returned, with parameters such as `alpn` and `ech` preserved.
 

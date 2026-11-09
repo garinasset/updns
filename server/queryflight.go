@@ -50,7 +50,7 @@ func (s *Server) startQueryLocked(key, domain string, queryType uint16, client, 
 		if s.flights[key] == flight {
 			if s.cache != nil {
 				var replacement *cache.CacheEntry
-				if err == nil && result != nil && result.TTL > 0 {
+				if err == nil && result != nil && result.TTL > 0 && !result.LocalAnswer && !isLocalAnswerAction(result.Action) {
 					now := time.Now()
 					replacement = &cache.CacheEntry{
 						Query: domain, QueryType: queryType, Answers: result.Records, Authority: result.Authority,

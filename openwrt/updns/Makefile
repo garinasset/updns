@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=updns
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=55
+PKG_RELEASE:=56
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=file://$(TOPDIR)/dl
