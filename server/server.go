@@ -481,30 +481,35 @@ func (s *Server) queryFrom(domain string, queryType uint16, client string) (*Que
 		return nil, err
 	}
 	domain = strings.ToLower(dns.Fqdn(domain))
-	if result, found := s.queryLocal(domain, queryType); found {
+	own := s.findMatchingRule(domain)
+	route := s.routeForRule(domain, own)
+	if own != nil && isLocalAnswerAction(own.Action) {
 		s.discardLocalCache(domain, queryType)
-		s.applyServiceBindings(result)
+		return s.resolveQueryForRoute(s.ctx, domain, queryType, client, "", route)
+	}
+	if result, found := s.queryLocal(domain, queryType, route); found {
+		s.discardLocalCache(domain, queryType)
+		s.applyServiceBindings(result, own)
 		return result, nil
 	}
-	result, err := s.queryRouted(domain, queryType, client)
+	result, err := s.queryRouted(domain, queryType, client, own)
 	// A binding created while this query was resolving changes its routing;
 	// resolve again so the returned addresses reach the current nftsets.
-	if err == nil && result != nil && s.bindings.size.Load() > 0 && result.route != s.routeFor(domain).signature {
-		result, err = s.resolveQueryDetailContext(s.ctx, domain, queryType, client)
+	if err == nil && result != nil && (s.bindings.size.Load() > 0 || strings.HasPrefix(result.route, "b:")) {
+		current := s.routeForRule(domain, own)
+		if result.route != current.signature {
+			result, err = s.resolveQueryForRoute(s.ctx, domain, queryType, client, "", current)
+		}
 	}
 	if err == nil {
-		s.applyServiceBindings(result)
+		s.applyServiceBindings(result, own)
 	}
 	return result, err
 }
 
-func (s *Server) queryRouted(domain string, queryType uint16, client string) (*QueryResult, error) {
+func (s *Server) queryRouted(domain string, queryType uint16, client string, own *config.Rule) (*QueryResult, error) {
 	cacheKey := fmt.Sprintf("%s:%d", domain, queryType)
-	route := s.routeFor(domain)
-	if route.rule != nil && isLocalAnswerAction(route.rule.Action) {
-		s.discardLocalCache(domain, queryType)
-		return s.resolveQueryDetailContext(s.ctx, domain, queryType, client)
-	}
+	route := s.routeForRule(domain, own)
 	s.queryMu.Lock()
 	if err := s.ctx.Err(); err != nil {
 		s.queryMu.Unlock()
@@ -537,7 +542,7 @@ func (s *Server) queryRouted(domain string, queryType uint16, client string) (*Q
 	flight := s.flights[cacheKey]
 	if flight != nil && flight.route != route.signature {
 		s.queryMu.Unlock()
-		return s.resolveQueryDetailContext(s.ctx, domain, queryType, client)
+		return s.resolveQueryForRoute(s.ctx, domain, queryType, client, "", route)
 	}
 	waited := flight != nil && flight.preload
 	if flight == nil {
@@ -547,14 +552,14 @@ func (s *Server) queryRouted(domain string, queryType uint16, client string) (*Q
 			previous, epoch = s.cache.Snapshot(cacheKey)
 			s.cache.Suspend(cacheKey)
 		}
-		flight = s.startQueryLocked(cacheKey, domain, queryType, client, route.signature, previous, epoch, false)
+		flight = s.startQueryLocked(cacheKey, domain, queryType, client, own, route.signature, previous, epoch, false)
 	}
 	s.queryMu.Unlock()
 	select {
 	case <-flight.done:
 		if flight.result == nil {
 			if waited {
-				result := s.queryMetadata(domain, queryType)
+				result := s.metadataFor(domain, queryType, s.routeForRule(domain, own))
 				result.PrefetchWait = true
 				result.Rcode = dns.RcodeServerFailure
 				result.Error = failureReason(flight.err)
@@ -593,7 +598,8 @@ func (s *Server) preloadCacheEntries() {
 	entries, epoch := s.cache.TakePreloads(limit - s.preloading)
 	for _, entry := range entries {
 		key := fmt.Sprintf("%s:%d", entry.Query, entry.QueryType)
-		route := s.routeFor(entry.Query)
+		own := s.findMatchingRule(entry.Query)
+		route := s.routeForRule(entry.Query, own)
 		if route.rule != nil && isLocalAnswerAction(route.rule.Action) {
 			s.cache.Remove(key)
 			if s.started {
@@ -602,7 +608,7 @@ func (s *Server) preloadCacheEntries() {
 			continue
 		}
 		if s.flights[key] == nil {
-			s.startQueryLocked(key, entry.Query, entry.QueryType, "", route.signature, entry, epoch, true)
+			s.startQueryLocked(key, entry.Query, entry.QueryType, "", own, route.signature, entry, epoch, true)
 		}
 	}
 }
@@ -819,14 +825,13 @@ func (s *Server) resolveQueryDetail(domain string, queryType uint16, client stri
 }
 
 func (s *Server) resolveQueryDetailContext(ctx context.Context, domain string, queryType uint16, client string) (*QueryResult, error) {
-	return s.resolveQueryWithUpstreamContext(ctx, domain, queryType, client, "")
+	return s.resolveQueryForRoute(ctx, domain, queryType, client, "", s.routeFor(domain))
 }
 
-func (s *Server) resolveQueryWithUpstreamContext(ctx context.Context, domain string, queryType uint16, client, preferred string) (*QueryResult, error) {
+func (s *Server) resolveQueryForRoute(ctx context.Context, domain string, queryType uint16, client, preferred string, route queryRoute) (*QueryResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	route := s.routeFor(domain)
 	result := s.metadataFor(domain, queryType, route)
 	result.Rcode = dns.RcodeSuccess
 
@@ -854,7 +859,7 @@ func (s *Server) resolveQueryWithUpstreamContext(ctx context.Context, domain str
 			return result, nil
 		}
 	}
-	if local, found := s.queryLocal(domain, queryType); found {
+	if local, found := s.queryLocal(domain, queryType, route); found {
 		return local, nil
 	}
 

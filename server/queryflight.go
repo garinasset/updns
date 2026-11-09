@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/garinasset/updns/cache"
+	"github.com/garinasset/updns/config"
 	"github.com/miekg/dns"
 )
 
@@ -20,7 +21,7 @@ type queryFlight struct {
 }
 
 // queryMu protects registration and commit; network I/O never holds it.
-func (s *Server) startQueryLocked(key, domain string, queryType uint16, client, route string, previous *cache.CacheEntry, epoch uint64, preload bool) *queryFlight {
+func (s *Server) startQueryLocked(key, domain string, queryType uint16, client string, own *config.Rule, route string, previous *cache.CacheEntry, epoch uint64, preload bool) *queryFlight {
 	ctx, cancel := context.WithCancel(s.ctx)
 	flight := &queryFlight{done: make(chan struct{}), cancel: cancel, preload: preload, route: route}
 	if s.flights == nil {
@@ -38,7 +39,11 @@ func (s *Server) startQueryLocked(key, domain string, queryType uint16, client, 
 		if previous != nil && previous.Route == route {
 			preferred = previous.Upstream
 		}
-		result, err := s.resolveQueryWithUpstreamContext(ctx, domain, queryType, client, preferred)
+		current := s.routeForRule(domain, own)
+		if current.signature != route {
+			preferred = ""
+		}
+		result, err := s.resolveQueryForRoute(ctx, domain, queryType, client, preferred, current)
 		s.queryMu.Lock()
 		defer s.queryMu.Unlock()
 		if ctx.Err() != nil {

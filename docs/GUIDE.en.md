@@ -53,6 +53,8 @@ A plain domain matches the exact domain and its subdomains: `example.com` matche
 
 Each list builds a compressed reverse trie at load time. Queries follow domain suffixes instead of scanning every pattern; rules retain configuration order and matching results are not separately cached.
 
+Each query reuses its own-domain rule match: blocking rules answer directly, and local, cache and upstream paths do not rescan rules. Dynamic HTTPS/SVCB bindings are still checked where needed, including asynchronous resolution startup and before returning. New queries and background preloads match independently; routes are not cached across requests.
+
 ### Rule Behavior
 
 Rules are evaluated in order and evaluation stops at the first applicable match. A rule may reference multiple domain lists; matching any one of them satisfies the domain condition. LuCI supports drag-and-drop ordering of regular rules; selecting "Do Not Match (Fallback Rule)" in the rule's "If the Domain Matches" drop-down (`domain_match='0'`) makes it a fallback rule. There can be at most one fallback rule and it always runs after the regular rules.

@@ -323,8 +323,7 @@ func (l *localDNS) lookup(domain string, queryType uint16) (*dns.Msg, string, er
 
 // queryLocal answers from hosts/DHCP data; unreadable local data is logged
 // and treated as a miss so cache and upstream resolution keep working.
-func (s *Server) queryLocal(domain string, queryType uint16) (*QueryResult, bool) {
-	route := s.routeFor(domain)
+func (s *Server) queryLocal(domain string, queryType uint16, route queryRoute) (*QueryResult, bool) {
 	if s.local == nil || (route.rule != nil && isLocalAnswerAction(route.rule.Action)) {
 		return nil, false
 	}

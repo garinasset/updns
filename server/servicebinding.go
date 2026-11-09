@@ -149,7 +149,11 @@ func (s *Server) ruleByID(id string) *config.Rule {
 }
 
 func (s *Server) routeFor(domain string) queryRoute {
-	own := s.findMatchingRule(domain)
+	return s.routeForRule(domain, s.findMatchingRule(domain))
+}
+
+// Only the domain's own rule is stable for a query; bindings are read afresh.
+func (s *Server) routeForRule(domain string, own *config.Rule) queryRoute {
 	route := queryRoute{rule: own}
 	if own != nil {
 		route.ruleIDs = []string{own.ID}
@@ -275,11 +279,11 @@ func serviceTarget(rr dns.RR) (string, bool) {
 
 // applyServiceBindings binds the target names of returned HTTPS/SVCB records
 // to the query's rule, dropping records whose target cannot be bound.
-func (s *Server) applyServiceBindings(result *QueryResult) {
+func (s *Server) applyServiceBindings(result *QueryResult, own *config.Rule) {
 	if result == nil || result.Rcode != dns.RcodeSuccess || !hasServiceRecords(result.Records) {
 		return
 	}
-	route := s.routeFor(result.Domain)
+	route := s.routeForRule(result.Domain, own)
 	if route.rule == nil {
 		return
 	}
@@ -328,13 +332,13 @@ func (s *Server) bindServiceTarget(target string, ruleIDs []string, ttl time.Dur
 	if own != nil && isLocalAnswerAction(own.Action) {
 		return false
 	}
-	before := s.routeFor(target).signature
+	before := s.routeForRule(target, own).signature
 	for _, id := range ruleIDs {
 		if _, ok := s.bindings.bind(target, id, ttl, hop, now); !ok {
 			return false
 		}
 	}
-	if s.routeFor(target).signature != before {
+	if s.routeForRule(target, own).signature != before {
 		s.prefetchServiceTarget(target)
 	}
 	return true
