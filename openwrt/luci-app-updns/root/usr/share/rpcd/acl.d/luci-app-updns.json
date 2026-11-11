@@ -1,6 +1,6 @@
 {
 	"luci-app-updns": {
-		"description": "Grant access to UpDNS configuration and status",
+		"description": "Grant access to updns configuration and status",
 		"read": {
 			"file": {
 				"/tmp/updns_cache_size": [ "read" ],

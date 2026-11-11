@@ -23,7 +23,7 @@ if [ ! -f feeds/base.index ] || [ ! -f feeds/packages.index ] || [ ! -f feeds/lu
 	./scripts/feeds update base packages luci
 fi
 
-# Install package definitions required by UpDNS before indexing its feed entry.
+# Install package definitions required by updns before indexing its feed entry.
 ./scripts/feeds install -p base ca-certificates nftables
 
 mkdir -p "$sdk/dl" "$sdk/feeds/packages/net" "$sdk/feeds/luci/applications"

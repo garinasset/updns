@@ -2,14 +2,14 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=updns
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=57
+PKG_RELEASE:=59
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=file://$(TOPDIR)/dl
 PKG_HASH:=skip
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
-PKG_MAINTAINER:=UpDNS Community
+PKG_MAINTAINER:=updns Community
 PKG_LICENSE:=Apache-2.0
 PKG_BUILD_DEPENDS:=golang/host
 PKG_BUILD_PARALLEL:=1
@@ -24,14 +24,15 @@ define Package/updns
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=DNS
-  TITLE:=UpDNS upstream DNS server
+  TITLE:=updns upstream DNS server
   DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +nftables-json
 endef
 
 # 描述 - 软件包
 define Package/updns/description
-  DNS forwarding service with UCI configuration, DNS-over-HTTPS upstreams,
-  domain rules, caching and nftables set integration.
+  Turnout DNS (application name: updns) is a local DNS server for OpenWrt. Compared with dnsmasq,
+  it offers more flexible DNS routing and nftables set integration, along with DoT/DoH upstream support,
+  ad blocking, and DNS auditing.
 endef
 
 define Package/updns/conffiles

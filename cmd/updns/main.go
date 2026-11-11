@@ -98,7 +98,7 @@ func startService() {
 	}
 	defer func() {
 		if err := srv.Stop(); err != nil {
-			logging.Errorf("Failed to stop UpDNS service cleanly: %v", err)
+			logging.Errorf("Failed to stop updns service cleanly: %v", err)
 		}
 	}()
 

@@ -28,12 +28,15 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("Expected CacheEnabled to be true by default")
 	}
 
-	if cfg.CacheSize != 4096 {
-		t.Errorf("Expected CacheSize 4096, got %d", cfg.CacheSize)
+	if cfg.CacheSize != 2048 {
+		t.Errorf("Expected CacheSize 2048, got %d", cfg.CacheSize)
 	}
 
-	if !cfg.ActivePreload {
-		t.Error("Expected ActivePreload to be true by default")
+	if !cfg.CachePrefetch {
+		t.Error("Expected CachePrefetch to be true by default")
+	}
+	if cfg.QueryStrategy != StrategyConcurrent {
+		t.Errorf("Expected concurrent query strategy, got %q", cfg.QueryStrategy)
 	}
 
 	if cfg.LogQuery {
@@ -63,8 +66,8 @@ func TestSaveAndLoadUCI(t *testing.T) {
 		LocalResolvFile: "/custom/resolv.conf",
 		QueryStrategy:   StrategyConcurrent,
 		CacheEnabled:    false,
-		CacheSize:       4096,
-		ActivePreload:   false,
+		CacheSize:       2048,
+		CachePrefetch:   false,
 		LogQuery:        true,
 		LogLevel:        "debug",
 	}
@@ -80,6 +83,9 @@ func TestSaveAndLoadUCI(t *testing.T) {
 		t.Fatalf("Failed to read saved config: %v", err)
 	}
 	savedText := string(savedConfig)
+	if strings.Contains(savedText, "active_preload") || !strings.Contains(savedText, `option cache_prefetch "0"`) {
+		t.Fatal("saved UCI config must use cache_prefetch exclusively")
+	}
 	if strings.Contains(savedText, "option enable ") {
 		t.Fatal("saved UCI config must not contain the obsolete service lifecycle option")
 	}
@@ -94,6 +100,9 @@ func TestSaveAndLoadUCI(t *testing.T) {
 	loadedCfg, err := LoadFromUCI(tmpFile)
 	if err != nil {
 		t.Fatalf("Failed to load config: %v", err)
+	}
+	if loadedCfg.CachePrefetch != cfg.CachePrefetch {
+		t.Fatal("cache_prefetch did not round trip")
 	}
 
 	if loadedCfg.Port != cfg.Port {
@@ -248,6 +257,45 @@ func TestLoadPackagedUCIHasNoImplicitUpstreams(t *testing.T) {
 	if !reflect.DeepEqual(cfg.UpstreamDNS, want) {
 		t.Fatalf("got upstreams %#v, want %#v", cfg.UpstreamDNS, want)
 	}
+	if cfg.CacheSize != 2048 || cfg.QueryStrategy != StrategyConcurrent || !cfg.CachePrefetch {
+		t.Fatalf("packaged defaults differ from product defaults: %#v", cfg)
+	}
+}
+
+func TestCachePrefetchConfiguration(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		options string
+		want    bool
+		invalid bool
+	}{
+		{name: "default", want: true},
+		{name: "enabled", options: "option cache_prefetch '1'\n", want: true},
+		{name: "disabled", options: "option cache_prefetch '0'\n"},
+		{name: "legacy ignored", options: "option active_preload '0'\n", want: true},
+		{name: "new field wins", options: "option active_preload '1'\noption cache_prefetch '0'\n"},
+		{name: "invalid", options: "option cache_prefetch 'invalid'\n", invalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "updns")
+			if err := os.WriteFile(path, []byte("config updns 'general'\noption use_local_resolv '0'\n"+tt.options), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadFromUCI(path)
+			if tt.invalid {
+				if err == nil || cfg != nil || !strings.Contains(err.Error(), "invalid updns.general option: invalid boolean") {
+					t.Fatalf("invalid cache_prefetch was not reported: config=%#v error=%v", cfg, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.CachePrefetch != tt.want {
+				t.Fatalf("cache_prefetch=%t, want %t", cfg.CachePrefetch, tt.want)
+			}
+		})
+	}
 }
 
 func TestLoadRulesPreservesUCIOrder(t *testing.T) {
@@ -273,6 +321,36 @@ config rule 'second'
 	}
 	if len(cfg.Rules) != 2 || cfg.Rules[0].ID != "first" || cfg.Rules[1].ID != "second" {
 		t.Fatalf("UCI rule order was not preserved: %#v", cfg.Rules)
+	}
+}
+
+func TestLocalResolversPrecedeConfiguredUpstreams(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+	if err := os.WriteFile(resolvPath, []byte("nameserver 192.0.2.53\nnameserver 192.0.2.54\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.LocalResolvFile = resolvPath
+	cfg.UpstreamDNS = []UpstreamDNS{
+		{Name: "second", Address: "192.0.2.55", Protocol: "udp", Timeout: 5},
+		{Name: "first", Address: "192.0.2.56", Protocol: "udp", Timeout: 5},
+	}
+	path := filepath.Join(dir, "updns")
+	if err := SaveToUCI(cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadFromUCI(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, upstream := range loaded.UpstreamDNS {
+		names = append(names, upstream.Name)
+	}
+	want := []string{"local-resolv-1", "local-resolv-2", "second", "first"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("got upstream order %v, want %v", names, want)
 	}
 }
 

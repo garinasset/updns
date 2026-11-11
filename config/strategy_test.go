@@ -9,7 +9,7 @@ import (
 
 func TestQueryStrategyConfiguration(t *testing.T) {
 	strategies := map[string]QueryStrategy{
-		"":  StrategyOptimal,
+		"":  StrategyConcurrent,
 		"0": StrategyOptimal,
 		"1": StrategyStrict,
 		"2": StrategyConcurrent,
@@ -85,7 +85,7 @@ func TestLegacyConcurrentFieldHasNoCompatibilityMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, err := LoadFromUCI(path)
-	if err != nil || cfg.QueryStrategy != StrategyOptimal {
+	if err != nil || cfg.QueryStrategy != StrategyConcurrent {
 		t.Fatalf("legacy field changed the new default: %#v %v", cfg, err)
 	}
 }

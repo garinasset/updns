@@ -72,7 +72,7 @@ func listenControlSocket(path string) (net.Listener, error) {
 	return listener, nil
 }
 
-// QueryRunningService queries the running UpDNS instance over its local control socket.
+// QueryRunningService queries the running updns instance over its local control socket.
 func QueryRunningService(domain string) ([]*QueryResult, error) {
 	return queryControlSocket(controlSocketPath, domain)
 }
@@ -88,12 +88,12 @@ func queryControlSocket(path, domain string) ([]*QueryResult, error) {
 	}
 
 	if err := json.NewEncoder(conn).Encode(controlRequest{Domain: domain}); err != nil {
-		return nil, fmt.Errorf("send query to UpDNS service: %w", err)
+		return nil, fmt.Errorf("send query to updns service: %w", err)
 	}
 
 	var response controlResponse
 	if err := json.NewDecoder(conn).Decode(&response); err != nil {
-		return nil, fmt.Errorf("read query result from UpDNS service: %w", err)
+		return nil, fmt.Errorf("read query result from updns service: %w", err)
 	}
 	if len(response.Results) == 0 && response.Error != "" {
 		return nil, errors.New(response.Error)

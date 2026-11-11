@@ -1182,7 +1182,7 @@ func TestFailureReason(t *testing.T) {
 	}
 }
 
-func TestStopCancelsActivePreload(t *testing.T) {
+func TestStopCancelsCachePrefetch(t *testing.T) {
 	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

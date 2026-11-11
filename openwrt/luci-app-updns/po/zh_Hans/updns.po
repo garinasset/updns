@@ -1,8 +1,8 @@
 msgid ""
 msgstr ""
-"Project-Id-Version: UpDNS 1.0.35\n"
+"Project-Id-Version: updns 1.0.41\n"
 "PO-Revision-Date: 2026-11-06 16:53+0800\n"
-"Last-Translator: UpDNS contributors\n"
+"Last-Translator: updns contributors\n"
 "Language-Team: Simplified Chinese\n"
 "Language: zh_CN\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
@@ -10,11 +10,11 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-msgid "UpDNS"
-msgstr "UpDNS"
+msgid "Turnout DNS"
+msgstr "道岔 DNS"
 
-msgid "UpDNS is an upstream DNS provider that offers a unified DNS entry point and routes queries to selected upstream servers."
-msgstr "updns 是一个上游 DNS 提供商，对外提供统一的 DNS 服务入口，对内匹配规则将查询分发至指定的上游 DNS。"
+msgid "Turnout DNS (application name: updns) is a local DNS server for OpenWrt. Compared with dnsmasq, it offers more flexible DNS routing and nftables set integration, along with DoT/DoH upstream support, ad blocking, and DNS auditing."
+msgstr "道岔 DNS（Turnout DNS，应用名：updns） 是一个 OpenWrt 上的本地 DNS 服务器，与 dnsmasq 不同的是，updns 提供了更灵活的 DNS 路由、 NFT set 联动，除此之外它还支持 DoT、DoH 且拥有强大的 广告拦截 和 DNS 审计 能力。"
 
 msgid "Running Status"
 msgstr "运行状态"
@@ -37,23 +37,23 @@ msgstr "缓存条目数"
 msgid "Settings and Port"
 msgstr "设置及端口"
 
-msgid "Enable UpDNS"
+msgid "Enable updns"
 msgstr "启用"
 
-msgid "Start or stop the UpDNS service."
-msgstr "启动或停止 UpDNS 服务。"
+msgid "Start or stop the updns service."
+msgstr "启动或停止 updns 服务。"
 
 msgid "Port"
 msgstr "端口"
 
-msgid "UDP and TCP port on which UpDNS accepts DNS queries."
-msgstr "UpDNS 接收 DNS 查询的 UDP 和 TCP 端口。"
+msgid "UDP and TCP port on which updns accepts DNS queries."
+msgstr "updns 接收 DNS 查询的 UDP 和 TCP 端口。"
 
 msgid "Use Local Resolv File"
 msgstr "使用本地解析文件"
 
-msgid "Add every nameserver in the resolver file below as a UDP upstream when the service starts."
-msgstr "服务启动时，将下方解析文件中的所有 nameserver 自动添加为 UDP 上游。"
+msgid "Automatically load nameservers from the resolver file below as UDP upstreams and check for changes while running."
+msgstr "将下方解析文件中的 nameserver 自动加载为 UDP 上游，并在服务运行时检查更新。"
 
 msgid "Local Resolv File"
 msgstr "本地解析文件"
@@ -73,8 +73,8 @@ msgstr "动态调度"
 msgid "Strict Order"
 msgstr "严格顺序"
 
-msgid "Defines how upstream DNS servers referenced by a rule are selected. Dynamic Scheduling dynamically selects and reuses well-performing upstreams; Strict Order tries them in the configured order; Concurrent Query uses the first valid response."
-msgstr "定义规则内上游 DNS 的选择机制。动态调度会动态选择并复用表现良好的上游；严格顺序会按配置顺序尝试；并发查询则采用首个有效响应。"
+msgid "Defines how upstream DNS servers are selected within a rule. If no rule matches, the entire upstream DNS list is used. Dynamic Scheduling selects and reuses well-performing upstreams; Strict Order tries upstreams in their configured order; Concurrent Queries uses the first valid response."
+msgstr "定义规则内上游 DNS 的选择机制, 无规则命中时会使用整个上游 DNS 列表。动态调度会动态选择并复用表现良好的上游；严格顺序会按配置顺序尝试；并发查询则采用首个有效响应。"
 
 msgid "Upstream DNS"
 msgstr "上游 DNS"
@@ -144,7 +144,7 @@ msgid "Enable Cache"
 msgstr "启用缓存"
 
 msgid "Enable or disable DNS caching."
-msgstr "启用或禁用 UpDNS 缓存。"
+msgstr "启用或禁用 updns 缓存。"
 
 msgid "Cache Size"
 msgstr "缓存大小"
@@ -152,7 +152,7 @@ msgstr "缓存大小"
 msgid "Maximum number of DNS entries kept in the cache."
 msgstr "缓存中保留的 DNS 条目数量上限。"
 
-msgid "Active Preload"
+msgid "Cache Prefetch"
 msgstr "主动预取"
 
 msgid "Refresh cached records shortly before their TTL expires."

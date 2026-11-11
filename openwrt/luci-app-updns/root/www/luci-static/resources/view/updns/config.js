@@ -767,23 +767,23 @@ return view.extend({
 		var configuredUpstreams = uci.sections('updns', 'upstream') || [];
 		var localResolvers = parseLocalResolvers(resolv.resolv, configuredUpstreams);
 		var nftResult = listNFTSets(data[3]);
-		var m = new form.Map('updns', _('UpDNS'),
-			_('UpDNS is an upstream DNS provider that offers a unified DNS entry point and routes queries to selected upstream servers.'));
+		var m = new form.Map('updns', _('Turnout DNS'),
+			_('Turnout DNS (application name: updns) is a local DNS server for OpenWrt. Compared with dnsmasq, it offers more flexible DNS routing and nftables set integration, along with DoT/DoH upstream support, ad blocking, and DNS auditing.'));
 		var s, o;
 		var dynamicOptionRefreshers = [];
 
 		s = m.section(form.NamedSection, 'general', 'updns', _('Settings and Port'));
-		o = s.option(form.Flag, 'enabled', _('Enable UpDNS'),
-			_('Start or stop the UpDNS service.'));
+		o = s.option(form.Flag, 'enabled', _('Enable updns'),
+			_('Start or stop the updns service.'));
 		o.default = '0';
 		o.rmempty = false;
 		o = s.option(form.Value, 'port', _('Port'),
-			_('UDP and TCP port on which UpDNS accepts DNS queries.'));
+			_('UDP and TCP port on which updns accepts DNS queries.'));
 		o.datatype = 'port';
 		o.default = '153';
 		o.rmempty = false;
 		o = s.option(form.Flag, 'use_local_resolv', _('Use Local Resolv File'),
-			_('Add every nameserver in the resolver file below as a UDP upstream when the service starts.'));
+			_('Automatically load nameservers from the resolver file below as UDP upstreams and check for changes while running.'));
 		o.default = '1';
 		o.rmempty = false;
 		o = s.option(form.Value, 'local_resolv_file', _('Local Resolv File'),
@@ -791,11 +791,11 @@ return view.extend({
 		o.default = '/tmp/resolv.conf.d/resolv.conf.auto';
 		o.depends('use_local_resolv', '1');
 		o = s.option(form.ListValue, 'query_strategy', _('Upstream DNS Selection Strategy'),
-			_('Defines how upstream DNS servers referenced by a rule are selected. Dynamic Scheduling dynamically selects and reuses well-performing upstreams; Strict Order tries them in the configured order; Concurrent Query uses the first valid response.'));
+			_('Defines how upstream DNS servers are selected within a rule. If no rule matches, the entire upstream DNS list is used. Dynamic Scheduling selects and reuses well-performing upstreams; Strict Order tries upstreams in their configured order; Concurrent Queries uses the first valid response.'));
 		o.value('0', _('Dynamic Scheduling'));
 		o.value('1', _('Strict Order'));
 		o.value('2', _('Concurrent Query'));
-		o.default = '0';
+		o.default = '2';
 		o.rmempty = false;
 
 		s = m.section(form.GridSection, 'upstream', _('Upstream DNS'));
@@ -872,9 +872,9 @@ return view.extend({
 		o = s.option(form.Value, 'cache_size', _('Cache Size'),
 			_('Maximum number of DNS entries kept in the cache.'));
 		o.datatype = 'uinteger';
-		o.default = '4096';
+		o.default = '2048';
 		o.depends('cache_enabled', '1');
-		o = s.option(form.Flag, 'active_preload', _('Active Preload'),
+		o = s.option(form.Flag, 'cache_prefetch', _('Cache Prefetch'),
 			_('Refresh cached records shortly before their TTL expires.'));
 		o.default = '1';
 		o.depends('cache_enabled', '1');

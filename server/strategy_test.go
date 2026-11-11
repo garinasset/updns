@@ -1,7 +1,10 @@
 package server
 
 import (
+	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +13,54 @@ import (
 	"github.com/garinasset/updns/config"
 	"github.com/miekg/dns"
 )
+
+func TestUnmatchedQueryUsesWholeOrderedUpstreamList(t *testing.T) {
+	for _, withRule := range []bool{false, true} {
+		t.Run(fmt.Sprintf("with-unmatched-rule=%t", withRule), func(t *testing.T) {
+			var localCalls, configuredCalls atomic.Int32
+			local := newFlightTestServer(t, func(w dns.ResponseWriter, query *dns.Msg) {
+				localCalls.Add(1)
+				response := new(dns.Msg)
+				response.SetReply(query)
+				response.Question = nil
+				if err := w.WriteMsg(response); err != nil {
+					t.Errorf("write invalid local response: %v", err)
+				}
+			})
+			srv := newFlightTestServer(t, func(w dns.ResponseWriter, query *dns.Msg) {
+				configuredCalls.Add(1)
+				if localCalls.Load() != 1 {
+					t.Error("strict order queried the configured upstream before the local resolver")
+				}
+				writeFlightAnswer(t, w, query)
+			})
+			srv.cfg.QueryStrategy = config.StrategyStrict
+			upstream := local.cfg.UpstreamDNS[0]
+			upstream.Name = config.LocalResolverPrefix + "1"
+			srv.cfg.UpstreamDNS = append([]config.UpstreamDNS{upstream}, srv.cfg.UpstreamDNS...)
+			if err := srv.RegisterUpstream(&upstream); err != nil {
+				t.Fatal(err)
+			}
+			if withRule {
+				path := filepath.Join(t.TempDir(), "domains")
+				if err := os.WriteFile(path, []byte("other.example\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := srv.LoadDomainList("other", path); err != nil {
+					t.Fatal(err)
+				}
+				srv.cfg.Rules = []config.Rule{{ID: "other", DomainLists: []string{"other"}, Upstreams: []string{"missing"}}}
+			}
+			result, err := srv.Query("unmatched.example.", dns.TypeA)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.MatchedRule != "" || result.UsedUpstream != "test" || localCalls.Load() != 1 || configuredCalls.Load() != 1 {
+				t.Fatalf("unmatched query did not use the full ordered group: %#v, local=%d configured=%d", result, localCalls.Load(), configuredCalls.Load())
+			}
+		})
+	}
+}
 
 func TestRefreshReusesOriginalUpstreamAndSwitchesOnlyOnFailure(t *testing.T) {
 	for _, strategy := range []config.QueryStrategy{config.StrategyOptimal, config.StrategyStrict, config.StrategyConcurrent} {

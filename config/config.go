@@ -32,7 +32,7 @@ type Config struct {
 	QueryStrategy   QueryStrategy
 	CacheEnabled    bool
 	CacheSize       int
-	ActivePreload   bool
+	CachePrefetch   bool
 	LogQuery        bool
 	LogLevel        string
 	UpstreamDNS     []UpstreamDNS
@@ -73,10 +73,10 @@ func DefaultConfig() *Config {
 		Port:            153,
 		UseLocalResolv:  true,
 		LocalResolvFile: "/tmp/resolv.conf.d/resolv.conf.auto",
-		QueryStrategy:   StrategyOptimal,
+		QueryStrategy:   StrategyConcurrent,
 		CacheEnabled:    true,
-		CacheSize:       4096,
-		ActivePreload:   true,
+		CacheSize:       2048,
+		CachePrefetch:   true,
 		LogQuery:        false,
 		LogLevel:        "info",
 		DomainLists:     []DomainList{},
@@ -133,7 +133,7 @@ func LoadFromUCI(configPath string) (*Config, error) {
 				cfg.CacheSize, err = parseIntOption(section, "cache_size", cfg.CacheSize)
 			}
 			if err == nil {
-				cfg.ActivePreload, err = parseBoolOption(section, "active_preload", cfg.ActivePreload)
+				cfg.CachePrefetch, err = parseBoolOption(section, "cache_prefetch", cfg.CachePrefetch)
 			}
 			if err == nil {
 				cfg.LogQuery, err = parseBoolOption(section, "log_query", cfg.LogQuery)
@@ -230,7 +230,7 @@ func SaveToUCI(cfg *Config, configPath string) error {
 	writeOption(&content, "query_strategy", string(cfg.QueryStrategy))
 	writeOption(&content, "cache_enabled", boolString(cfg.CacheEnabled))
 	writeOption(&content, "cache_size", strconv.Itoa(cfg.CacheSize))
-	writeOption(&content, "active_preload", boolString(cfg.ActivePreload))
+	writeOption(&content, "cache_prefetch", boolString(cfg.CachePrefetch))
 	writeOption(&content, "log_query", boolString(cfg.LogQuery))
 	writeOption(&content, "log_level", cfg.LogLevel)
 

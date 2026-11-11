@@ -240,7 +240,7 @@ func (s *Server) Start() error {
 	}()
 	go s.serveControl()
 
-	if s.cfg.ActivePreload && s.cache != nil {
+	if s.cfg.CachePrefetch && s.cache != nil {
 		s.preloadWG.Add(1)
 		go func() {
 			defer s.preloadWG.Done()

@@ -262,7 +262,7 @@ func TestFailedPreloadWaitPreservesFailurePath(t *testing.T) {
 
 func TestScanDoesNotWaitForSlowBatch(t *testing.T) {
 	var calls atomic.Int32
-	started := make(chan struct{}, 16)
+	started := make(chan struct{}, 2*preloadConcurrency(config.DefaultConfig().CacheSize))
 	release := make(chan struct{})
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
@@ -273,24 +273,25 @@ func TestScanDoesNotWaitForSlowBatch(t *testing.T) {
 		writeFlightAnswer(t, w, query)
 	})
 	defer unblock()
-	for i := 0; i < 16; i++ {
+	limit := preloadConcurrency(srv.cfg.CacheSize)
+	for i := 0; i < 2*limit; i++ {
 		seedPreload(srv, fmt.Sprintf("scan%d.example.", i), -time.Duration(i+1)*time.Second)
 	}
 	srv.preloadCacheEntries()
-	for i := 0; i < 8; i++ {
+	for i := 0; i < limit; i++ {
 		<-started
 	}
 	for i := 0; i < 10; i++ {
 		srv.preloadCacheEntries()
 	}
-	if calls.Load() != 8 {
+	if calls.Load() != int32(limit) {
 		t.Fatal("scan exceeded global limit or duplicated requests")
 	}
 	unblock()
 	srv.queryWG.Wait()
 	srv.preloadCacheEntries()
 	srv.queryWG.Wait()
-	if calls.Load() != 16 {
+	if calls.Load() != int32(2*limit) {
 		t.Fatal("remaining pending tasks not scheduled")
 	}
 }

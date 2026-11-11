@@ -1,6 +1,6 @@
 {
 	"admin/services/updns": {
-		"title": "UpDNS",
+		"title": "Turnout DNS",
 		"order": 80,
 		"action": {
 			"type": "view",
