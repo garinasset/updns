@@ -378,6 +378,38 @@ For test/development environments, see [`scripts/build-openwrt.sh`](../scripts/b
 
 The repository's `artifacts/` directory holds the latest successfully built and tested packages. Replace a component's old package only after its new package passes validation.
 
+### GitHub Actions package repository
+
+The GitHub Actions workflow builds for Go-compatible package architectures using the OpenWrt 25.12.6 SDK. The architecture-independent LuCI and Chinese translation packages are built once with the x86_64 SDK. Publication requires all builds to succeed; actual architecture availability depends on the workflow results. Other OpenWrt releases require validation and workflow changes. A successful build does not imply testing on a device.
+
+Before the first release, set **Settings → Pages → Build and deployment → Source** to **GitHub Actions**. The workflow replaces the entire Pages site. Generate a persistent signing key locally, keep the private key secret and backed up, and provide the public key's SHA-256 through an independently trusted channel:
+
+```sh
+umask 077
+openssl ecparam -name prime256v1 -genkey -noout -out updns-private.pem
+openssl pkey -in updns-private.pem -pubout -out updns-public.pem
+sha256sum updns-public.pem
+```
+
+Add the private key contents as the repository Actions secret `APK_SIGNING_KEY`, then merge the workflow into the default branch. The first push publishes the current versions; approve the workflow if required. Failed runs can be rerun. A changed signing key is rejected to avoid silently breaking users' trust.
+
+Default-branch pushes and manual runs compare the versions in the backend and LuCI Makefiles with the published versions. The first release builds all packages; unchanged versions are tested but not published. When only one package group changes, the other group's previously published packages are retained. Versions must not decrease; Git tags are not required. The translation package version includes LuCI's release number.
+
+After publication, verify the downloaded key's SHA-256 against the independently provided value before installing it and adding the matching feed:
+
+```sh
+ARCH="$(apk --print-arch)"
+wget -O /tmp/updns-public.pem https://garinasset.github.io/updns/updns.pem
+sha256sum /tmp/updns-public.pem
+# Only after verifying the expected SHA-256:
+cp /tmp/updns-public.pem /etc/apk/keys/updns.pem
+echo "https://garinasset.github.io/updns/25.12.6/${ARCH}/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
+apk update
+apk add updns luci-app-updns luci-i18n-updns-zh-cn
+```
+
+Do not use `--allow-untrusted` for this repository. Keep the official feeds matching your firmware enabled for dependencies, and recheck the feed after changing firmware or architecture. The remote repository is separate from local `artifacts/`.
+
 ## Troubleshooting
 
 - **Service not running:** Check `general.enabled` in `/etc/config/updns`, inspect `logread -e updns`, and ensure the listening port is free.

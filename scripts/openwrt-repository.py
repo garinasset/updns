@@ -103,7 +103,7 @@ def publish():
         for name, group in PACKAGES.items():
             filename = f"{name}-{current[group]}.apk"
             destination = directory / filename
-            if old and old["versions"][group] == current[group]:
+            if old and arch in old["packages"] and old["versions"][group] == current[group]:
                 entry = old["packages"][arch][name]
                 if entry["filename"] != filename:
                     raise ValueError("Published package filename does not match its version")
@@ -117,6 +117,14 @@ def publish():
                 if len(matches) != 1:
                     raise ValueError(f"Expected one {filename} for {build_arch}, found {len(matches)}")
                 shutil.copyfile(matches[0], destination)
+            metadata = json.loads(subprocess.check_output(
+                [apk, "adbdump", "--format", "json", str(destination)]
+            ))["info"]
+            expected_arch = arch if group == "updns" else "noarch"
+            if (metadata["name"], metadata["version"], metadata["arch"]) != (
+                name, current[group], expected_arch
+            ):
+                raise ValueError(f"Incorrect package metadata: {filename}")
             manifest["packages"][arch][name] = {
                 "filename": filename,
                 "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),

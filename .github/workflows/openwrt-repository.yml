@@ -111,12 +111,11 @@ jobs:
         run: |
           set -eu
           docker create --name apk-sdk "ghcr.io/openwrt/sdk:x86-64-${OPENWRT_RELEASE}"
-          docker cp apk-sdk:/builder/staging_dir/host/bin/apk "$RUNNER_TEMP/apk"
-          chmod +x "$RUNNER_TEMP/apk"
+          docker cp apk-sdk:/builder/staging_dir/host "$RUNNER_TEMP/apk-host"
       - name: Sign repository indexes
         env:
           APK_SIGNING_KEY: ${{ secrets.APK_SIGNING_KEY }}
-          APK_TOOL: ${{ runner.temp }}/apk
+          APK_TOOL: ${{ runner.temp }}/apk-host/bin/apk
           APK_KEY: ${{ runner.temp }}/updns-signing-key.pem
           INPUT_DIR: ${{ runner.temp }}/packages
           OUTPUT_DIR: ${{ runner.temp }}/site
