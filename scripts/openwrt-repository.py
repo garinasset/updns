@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -45,10 +46,31 @@ def fetch(path, allow_missing=False):
         raise
 
 
-def previous():
+def verify_signature(data, signature, public_key):
+    with tempfile.TemporaryDirectory() as directory:
+        key_path = Path(directory) / "public.pem"
+        signature_path = Path(directory) / "signature"
+        key_path.write_bytes(public_key)
+        signature_path.write_bytes(signature)
+        subprocess.run(
+            ["openssl", "dgst", "-sha256", "-verify", str(key_path),
+             "-signature", str(signature_path)],
+            input=data,
+            stdout=subprocess.DEVNULL,
+            check=True,
+        )
+
+
+def sign(data, key):
+    return subprocess.check_output(["openssl", "dgst", "-sha256", "-sign", key], input=data)
+
+
+def previous(public_key=None):
     data = fetch(RELEASE + "/manifest.json", allow_missing=True)
     if data is None:
         return None
+    if public_key is not None:
+        verify_signature(data, fetch(RELEASE + "/manifest.json.sig"), public_key)
     result = json.loads(data)
     if result["release"] != RELEASE:
         raise ValueError("Published manifest has an unexpected OpenWrt release")
@@ -77,7 +99,7 @@ def publish():
     key_digest = hashlib.sha256(public_key).hexdigest()
     registry_data = fetch("releases.json", allow_missing=True)
     if registry_data is None:
-        if old is not None:
+        if old is not None or fetch("updns.pem", allow_missing=True) is not None:
             raise ValueError("Existing repository has no release registry")
         releases = []
     else:
@@ -86,6 +108,13 @@ def publish():
             raise ValueError("Invalid release registry")
         if fetch("updns.pem") != public_key:
             raise ValueError("Signing key changed; refusing to replace the trusted repository")
+        verify_signature(registry_data, fetch("releases.json.sig"), public_key)
+        if (RELEASE in releases) != (old is not None):
+            raise ValueError("Release registry and published manifest do not match")
+        if old is not None:
+            old = previous(public_key)
+            if old is None:
+                raise ValueError("Published manifest disappeared")
 
     if old:
         if old["public_key_sha256"] != key_digest:
@@ -105,12 +134,15 @@ def publish():
         if release == RELEASE:
             continue
         data = fetch(f"{release}/manifest.json")
+        signature = fetch(f"{release}/manifest.json.sig")
+        verify_signature(data, signature, public_key)
         retained = json.loads(data)
         if retained["release"] != release or retained["public_key_sha256"] != key_digest:
             raise ValueError(f"Invalid manifest for {release}")
         release_dir = output / release
         release_dir.mkdir()
         (release_dir / "manifest.json").write_bytes(data)
+        (release_dir / "manifest.json.sig").write_bytes(signature)
         for arch, entries in retained["packages"].items():
             if not re.fullmatch(r"[a-z0-9_-]+", arch):
                 raise ValueError(f"Invalid architecture: {arch}")
@@ -174,10 +206,12 @@ def publish():
             cwd=directory,
             check=True,
         )
-    (output / RELEASE / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    (output / "releases.json").write_text(
-        json.dumps({"releases": sorted(set(releases + [RELEASE]))}, indent=2) + "\n"
-    )
+    manifest_data = (json.dumps(manifest, indent=2) + "\n").encode()
+    (output / RELEASE / "manifest.json").write_bytes(manifest_data)
+    (output / RELEASE / "manifest.json.sig").write_bytes(sign(manifest_data, key))
+    registry_data = (json.dumps({"releases": sorted(set(releases + [RELEASE]))}, indent=2) + "\n").encode()
+    (output / "releases.json").write_bytes(registry_data)
+    (output / "releases.json.sig").write_bytes(sign(registry_data, key))
 
 
 if __name__ == "__main__":
