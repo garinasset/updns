@@ -32,7 +32,11 @@ On your OpenWrt network, updns can run as a standalone local DNS server or as th
 
 **Client → updns → Rule matching → Local data / Cache / Upstream DNS (UDP · TCP · DoT · DoH) → nftset → Response**
 
-updns matches domain rules, handles blocking first, then uses hosts/DHCP local data and valid cache. When upstream resolution is needed, it queries the rule's selected upstreams (UDP, TCP, DoT, or DoH) using the selection strategy; Concurrent Query is the default. Without a matching rule or fallback rule, the entire current upstream list becomes the candidate group. Local resolver upstreams come first only in list order, with no guarantee that they win first. Cache refreshes first reuse the original winning upstream. All results follow applicable blocking, address-family, and nftset rules.
+- UpDNS matches domain rules and processes blocking rules first, followed by hosts, local DHCP data, and valid cache entries. It then determines whether an upstream DNS query is required. If no domain rule or fallback rule matches, the entire upstream DNS list serves as the default rule's upstream group.
+
+- When an upstream query is required, UpDNS selects upstream DNS servers according to the selection strategy configured for the matching rule.
+
+- All resolution results are subject to the applicable blocking, address family, and nftset rules.
 
 ## 💻 DNS Auditing — CLI Output Example
 
