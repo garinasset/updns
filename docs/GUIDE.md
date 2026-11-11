@@ -441,7 +441,7 @@ apk add --allow-untrusted \
 3. 将私钥文件内容添加为仓库 Actions secret，名称为 `APK_SIGNING_KEY`。备份私钥，并通过独立可信渠道公布公钥的 SHA-256。更换密钥需要用户重新建立信任；流程会拒绝直接替换已有签名密钥。
 4. 将流程合并至默认分支；首次推送会发布当前版本。失败后可在 Actions 中重新运行；如果工作流需要审批，请先批准。密钥和 Pages 配置应在首次发布前完成。
 
-默认分支推送或手动运行时，流程对比已发布的包版本：后端检查 `openwrt/updns/Makefile`，LuCI 和翻译检查 `openwrt/luci-app-updns/Makefile` 中的 `PKG_VERSION`、`PKG_RELEASE`。首次发布会构建全部包；版本未变化只运行测试，不更新软件源；只更新其中一组时，另一组保留原有包。版本不得回退，也不需要 Git 标签。中文翻译包版本包含 LuCI 的 release，因而增大 LuCI 的 `PKG_RELEASE` 也会更新翻译包。
+默认分支推送或手动运行时，流程对比已发布的包版本：后端检查 `openwrt/updns/Makefile`，LuCI 和翻译检查 `openwrt/luci-app-updns/Makefile` 中的 `PKG_VERSION`、`PKG_RELEASE`。首次发布会构建全部包；版本未变化只运行测试，不更新软件源；只更新其中一组时，另一组保留原有包。变更后的版本必须高于已发布版本，也不需要 Git 标签。中文翻译包版本包含 LuCI 的 release，因而增大 LuCI 的 `PKG_RELEASE` 也会更新翻译包。以后增加 OpenWrt 版本时，流程会保留已发布的其他版本软件源；请注意 GitHub Pages 的容量限制。
 
 用户安装时，应先通过维护者提供的独立可信渠道核对公钥 SHA-256，再配置与设备包架构匹配的软件源。以下地址仅在发布成功并启用 Pages 后可用：
 

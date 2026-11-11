@@ -75,6 +75,17 @@ def publish():
     architectures = json.loads(os.environ["ARCHITECTURES"])
     public_key = subprocess.check_output(["openssl", "pkey", "-in", key, "-pubout"])
     key_digest = hashlib.sha256(public_key).hexdigest()
+    registry_data = fetch("releases.json", allow_missing=True)
+    if registry_data is None:
+        if old is not None:
+            raise ValueError("Existing repository has no release registry")
+        releases = []
+    else:
+        releases = json.loads(registry_data)["releases"]
+        if not isinstance(releases, list) or len(set(releases)) != len(releases):
+            raise ValueError("Invalid release registry")
+        if fetch("updns.pem") != public_key:
+            raise ValueError("Signing key changed; refusing to replace the trusted repository")
 
     if old:
         if old["public_key_sha256"] != key_digest:
@@ -83,11 +94,38 @@ def publish():
             comparison = subprocess.check_output(
                 [apk, "version", "-t", old["versions"][group], new], text=True
             ).strip()
-            if comparison not in ("<", "="):
+            if comparison != ("=" if old["versions"][group] == new else "<"):
                 raise ValueError(f"Package version cannot go backwards: {group}")
 
     output.mkdir(parents=True, exist_ok=True)
     (output / "updns.pem").write_bytes(public_key)
+    for release in releases:
+        if not isinstance(release, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", release):
+            raise ValueError("Invalid release in registry")
+        if release == RELEASE:
+            continue
+        data = fetch(f"{release}/manifest.json")
+        retained = json.loads(data)
+        if retained["release"] != release or retained["public_key_sha256"] != key_digest:
+            raise ValueError(f"Invalid manifest for {release}")
+        release_dir = output / release
+        release_dir.mkdir()
+        (release_dir / "manifest.json").write_bytes(data)
+        for arch, entries in retained["packages"].items():
+            if not re.fullmatch(r"[a-z0-9_-]+", arch):
+                raise ValueError(f"Invalid architecture: {arch}")
+            directory = release_dir / arch
+            directory.mkdir()
+            (directory / "packages.adb").write_bytes(fetch(f"{release}/{arch}/packages.adb"))
+            for name, group in PACKAGES.items():
+                entry = entries[name]
+                filename = entry["filename"]
+                if filename != f"{name}-{retained['versions'][group]}.apk" or "/" in filename:
+                    raise ValueError("Invalid retained package filename")
+                package = fetch(f"{release}/{arch}/{filename}")
+                if hashlib.sha256(package).hexdigest() != entry["sha256"]:
+                    raise ValueError(f"Published package checksum mismatch: {filename}")
+                (directory / filename).write_bytes(package)
     manifest = {
         "release": RELEASE,
         "versions": current,
@@ -95,7 +133,7 @@ def publish():
         "packages": {},
     }
     for arch in architectures:
-        if not re.fullmatch(r"[a-z0-9_]+", arch):
+        if not re.fullmatch(r"[a-z0-9_-]+", arch):
             raise ValueError(f"Invalid architecture: {arch}")
         directory = output / RELEASE / arch
         directory.mkdir(parents=True)
@@ -137,6 +175,9 @@ def publish():
             check=True,
         )
     (output / RELEASE / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (output / "releases.json").write_text(
+        json.dumps({"releases": sorted(set(releases + [RELEASE]))}, indent=2) + "\n"
+    )
 
 
 if __name__ == "__main__":

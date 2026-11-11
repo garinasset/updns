@@ -393,7 +393,7 @@ sha256sum updns-public.pem
 
 Add the private key contents as the repository Actions secret `APK_SIGNING_KEY`, then merge the workflow into the default branch. The first push publishes the current versions; approve the workflow if required. Failed runs can be rerun. A changed signing key is rejected to avoid silently breaking users' trust.
 
-Default-branch pushes and manual runs compare the versions in the backend and LuCI Makefiles with the published versions. The first release builds all packages; unchanged versions are tested but not published. When only one package group changes, the other group's previously published packages are retained. Versions must not decrease; Git tags are not required. The translation package version includes LuCI's release number.
+Default-branch pushes and manual runs compare the versions in the backend and LuCI Makefiles with the published versions. The first release builds all packages; unchanged versions are tested but not published. When only one package group changes, the other group's previously published packages are retained. Changed versions must be strictly greater; Git tags are not required. The translation package version includes LuCI's release number. When another OpenWrt release is added, previously published feeds are retained, subject to GitHub Pages storage limits.
 
 After publication, verify the downloaded key's SHA-256 against the independently provided value before installing it and adding the matching feed:
 
