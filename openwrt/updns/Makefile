@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=updns
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=59
+PKG_RELEASE:=60
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=file://$(TOPDIR)/dl
@@ -25,7 +25,7 @@ define Package/updns
   CATEGORY:=Network
   SUBMENU:=DNS
   TITLE:=updns upstream DNS server
-  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +nftables-nojson
+  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +nftables
 endef
 
 # 描述 - 软件包
