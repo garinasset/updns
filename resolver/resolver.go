@@ -381,6 +381,13 @@ func exchangeDNS(ctx context.Context, msg *dns.Msg, address, network string, tim
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 	resp, _, err := client.ExchangeWithConnContext(ctx, msg, conn)
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+			// The socket deadline can fire before the context's deadline timer.
+			<-ctx.Done()
+		}
+	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
