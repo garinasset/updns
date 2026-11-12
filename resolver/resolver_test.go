@@ -416,6 +416,48 @@ func TestUDPTruncationRetriesTCP(t *testing.T) {
 	}
 }
 
+type delayedDeadlineContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c delayedDeadlineContext) Deadline() (time.Time, bool) { return c.deadline, true }
+
+func TestDNSDeadlineWaitsForContext(t *testing.T) {
+	for _, network := range []string{"udp", "tcp"} {
+		t.Run(network, func(t *testing.T) {
+			started := make(chan struct{})
+			address := startDNSUpstream(t, network, "127.0.0.1:0", func(dns.ResponseWriter, *dns.Msg) { close(started) })
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx := delayedDeadlineContext{Context: parent, deadline: time.Now().Add(100 * time.Millisecond)}
+			msg := new(dns.Msg)
+			msg.SetQuestion("www.example.", dns.TypeA)
+			done := make(chan error, 1)
+			go func() { _, err := exchangeDNS(ctx, msg, address, network, time.Second); done <- err }()
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("upstream request not started")
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("socket timeout returned before context cancellation: %v", err)
+			case <-time.After(time.Until(ctx.deadline) + 100*time.Millisecond):
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("exchange error = %v, want cancellation", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("exchange did not return after cancellation")
+			}
+		})
+	}
+}
+
 func TestResolveCancellationInterruptsDNSRead(t *testing.T) {
 	for _, network := range []string{"udp", "tcp"} {
 		t.Run(network, func(t *testing.T) {
