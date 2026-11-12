@@ -36,7 +36,7 @@ CONFIG_PACKAGE_luci-app-updns=m
 CONFIG_LUCI_LANG_zh_Hans=y
 EOF
 make defconfig
-make CONFIG_AUTOREMOVE= package/updns/compile
+make V=s CONFIG_AUTOREMOVE= package/updns/compile
 if [ "$mode" = all ]; then
 	make CONFIG_AUTOREMOVE= package/feeds/luci/luci-app-updns/compile
 fi
