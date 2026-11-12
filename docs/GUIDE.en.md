@@ -317,7 +317,7 @@ A rule with **Do not match (fallback rule)** (`domain_match='0'`) becomes the fa
 | Packaged backend UCI | [`updns`](../openwrt/updns/root/etc/config/updns) |
 | Package metadata and dependencies | [`openwrt/luci-app-updns/Makefile`](../openwrt/luci-app-updns/Makefile), [`openwrt/updns/Makefile`](../openwrt/updns/Makefile) |
 
-The page reads and saves UCI. Imported local upstreams appear as generated `local-resolv-N` entries. Global ordering determines the candidate sequence when neither an ordinary rule nor fallback applies; explicit rule upstreams retain their own reference order, with actual queries following the selected strategy. Service status comes from rpcd `service.list`, cache count from `/tmp/updns_cache_size`, and nftables sets from `nft -j list sets`. Domain-list files use rpcd file interfaces.
+The page reads and saves UCI. Imported local upstreams appear as generated `local-resolv-N` entries. Global ordering determines the candidate sequence when neither an ordinary rule nor fallback applies; explicit rule upstreams retain their own reference order, with actual queries following the selected strategy. Service status comes from rpcd `service.list`, cache count from `/tmp/updns_cache_size`, and nftables sets from `nft list sets`, filtered by set type into IPv4 and IPv6 options. Domain-list files use rpcd file interfaces.
 
 Generated and custom upstreams use the same columns and right-side drag/edit/delete controls. All three controls are disabled for generated entries, with tooltips identifying their automatic origin.
 
@@ -415,7 +415,7 @@ Do not use `--allow-untrusted` for this repository. Keep the official feeds matc
 - **Service not running:** Check `general.enabled` in `/etc/config/updns`, inspect `logread -e updns`, and ensure the listening port is free.
 - **Upstream query failure:** Check address, protocol, connectivity, and device CA certificates; set `log_level='debug'` for details.
 - **Cache not working:** Check `cache_enabled=1`. `nxdomain`/`zeroip` rules answer directly without upstream queries, cache reads/writes, or prefetch. Upstream NXDOMAIN is stored only when eligible for negative caching.
-- **nftables updates failing:** Ensure `nftables-json` is installed, target sets exist, and set/address families match.
+- **nftables updates failing:** Ensure `nftables` is installed, target sets exist, and set types match the address family.
 - **LuCI cannot read data:** Check required UCI/file/command permissions in rpcd ACLs, then reload rpcd/LuCI.
 
 procd collects regular updns logs for `logread`. Per-query DNS logs also require `log_query`.

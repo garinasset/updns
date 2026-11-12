@@ -364,7 +364,7 @@ config rule 'example_rule'
 | 后端默认 UCI 配置 | [`updns`](../openwrt/updns/root/etc/config/updns) |
 | 包元数据和依赖 | [`openwrt/luci-app-updns/Makefile`](../openwrt/luci-app-updns/Makefile)、[`openwrt/updns/Makefile`](../openwrt/updns/Makefile) |
 
-页面从 UCI 读取和保存配置；本地 resolver 项会显示为自动生成的 `local-resolv-N` 上游。全局上游顺序用于无普通规则及兜底规则命中时的候选组顺序；规则显式选择的上游仍按规则自身列表排序，实际查询遵循所选策略。服务状态来自 rpcd `service.list`，缓存条目数来自 `/tmp/updns_cache_size`，nftables 集合由页面调用 `nft -j list sets` 获取。域名列表通过 rpcd 文件接口读写。
+页面从 UCI 读取和保存配置；本地 resolver 项会显示为自动生成的 `local-resolv-N` 上游。全局上游顺序用于无普通规则及兜底规则命中时的候选组顺序；规则显式选择的上游仍按规则自身列表排序，实际查询遵循所选策略。服务状态来自 rpcd `service.list`，缓存条目数来自 `/tmp/updns_cache_size`，nftables 集合由页面调用 `nft list sets` 获取，并根据集合类型分别筛选 IPv4 与 IPv6 集合。域名列表通过 rpcd 文件接口读写。
 
 自动生成上游与自定义上游使用一致的表格列和右侧拖动、编辑、删除控件；自动生成项的三个控件全部禁用，悬停提示其由系统自动生成。
 上游列表保留列标题，仅隐藏列说明行；编辑弹窗仍保留字段标题和帮助说明。列表上方仅显示本地 resolver 的自动加载信息或读取错误，不显示拖动排序说明。
@@ -463,7 +463,7 @@ apk add updns luci-app-updns luci-i18n-updns-zh-cn
 - **服务未运行**：检查 `/etc/config/updns` 中 `general.enabled`，查看 `logread -e updns`，并确认监听端口未被占用。
 - **上游查询失败**：检查上游地址、协议、网络连通性和设备 CA 证书；将 `log_level` 调为 `debug` 获取更多信息。
 - **缓存未生效**：确认 `cache_enabled=1`；`nxdomain`、`zeroip` 规则直接应答，不查询上游、不读写缓存、不做预取。上游返回的 NXDOMAIN 只有符合负缓存条件时才缓存。
-- **nftables 更新失败**：确认 `nftables-json` 已安装、目标集合已创建，且集合族与地址族匹配。
+- **nftables 更新失败**：确认 `nftables` 已安装、目标集合已创建，且集合类型与地址族匹配。
 - **LuCI 无法读取数据**：核对 rpcd ACL 是否包含所需的 UCI、文件或命令权限，并重载 rpcd/LuCI 服务。
 
 updns 的常规日志由 procd 收集，可通过 `logread` 查看。DNS 查询逐条日志需同时启用 `log_query`。

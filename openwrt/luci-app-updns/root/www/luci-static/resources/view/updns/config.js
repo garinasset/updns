@@ -328,35 +328,70 @@ function listConfiguredUpstreams(localResolvers) {
 }
 
 function listNFTSets(reply) {
-	var document;
-	var sets = [];
+	var output = reply && reply.stdout || '';
+	var sets = { ipv4: [], ipv6: [] };
 	var seen = {};
+	var table = null;
+	var currentSet = null;
 
-	try {
-		document = JSON.parse(reply && reply.stdout || '');
-	}
-	catch (error) {
-		return { values: [], error: _('The system nftables set list could not be parsed.') };
-	}
+	if (reply && reply.error)
+		return { values: [], ipv4Values: [], ipv6Values: [], error: reply.error };
 
-	(document.nftables || []).forEach(function(item) {
-		var set = item.set;
-		if (!set || !set.family || !set.table || !set.name)
-			return;
+	String(output).split(/\r?\n/).forEach(function(line) {
+		var match;
+		var wasInSet = !!currentSet;
+		var startedSet = false;
 
-		var value = set.family + '/' + set.table + '/' + set.name;
-		if (seen[value])
-			return;
+		if (!currentSet) {
+			match = line.match(/^\s*table\s+(\S+)\s+(\S+)\s*\{/);
+			if (match) {
+				table = { family: match[1], name: match[2] };
+				return;
+			}
 
-		seen[value] = true;
-		sets.push({ value: value, label: set.table + '/' + set.name + ' (' + set.family + ')' });
+			match = line.match(/^\s*set\s+(\S+)\s*\{/);
+			if (match && table) {
+				currentSet = { name: match[1], depth: 0, type: null };
+				startedSet = true;
+			}
+		}
+
+		if (currentSet) {
+			match = line.match(/^\s*type\s+(.+?)\s*$/);
+			if (match)
+				currentSet.type = match[1];
+
+			currentSet.depth += (line.match(/\{/g) || []).length;
+			currentSet.depth -= (line.match(/\}/g) || []).length;
+			if (currentSet.depth <= 0) {
+				var family = currentSet.type === 'ipv4_addr' ? 'ipv4' :
+					(currentSet.type === 'ipv6_addr' ? 'ipv6' : null);
+				if (family) {
+					var value = table.family + '/' + table.name + '/' + currentSet.name;
+					if (!seen[value]) {
+						seen[value] = true;
+						sets[family].push({
+							value: value,
+							label: table.name + '/' + currentSet.name + ' (' + table.family + ')'
+						});
+					}
+				}
+				currentSet = null;
+			}
+		}
+
+		if (!wasInSet && !startedSet && /^\s*}\s*$/.test(line))
+			table = null;
 	});
 
-	sets.sort(function(a, b) {
-		return a.label.localeCompare(b.label);
-	});
-
-	return { values: sets, error: null };
+	sets.ipv4.sort(function(a, b) { return a.label.localeCompare(b.label); });
+	sets.ipv6.sort(function(a, b) { return a.label.localeCompare(b.label); });
+	return {
+		values: sets.ipv4.concat(sets.ipv6),
+		ipv4Values: sets.ipv4,
+		ipv6Values: sets.ipv6,
+		error: null
+	};
 }
 
 function ruleBadge(kind, text, missing) {
@@ -753,7 +788,7 @@ return view.extend({
 			callCacheSize('/tmp/updns_cache_size').catch(function(error) {
 				return { error: error };
 			}),
-			fs.exec('/usr/sbin/nft', [ '-j', 'list', 'sets' ]).catch(function(error) {
+			fs.exec('/usr/sbin/nft', [ 'list', 'sets' ]).catch(function(error) {
 				return { error: error, stdout: '' };
 			})
 		]);
@@ -769,7 +804,7 @@ return view.extend({
 		var nftResult = listNFTSets(data[3]);
 		var m = new form.Map('updns', _('Turnout DNS'),
 			_('Turnout DNS (application name: updns) is a local DNS server for OpenWrt. Compared with dnsmasq, it offers more flexible DNS routing and nftables set integration, along with DoT/DoH upstream support, ad blocking, and DNS auditing.'));
-		var s, o;
+		var s, o, ipv4NFTOption, ipv6NFTOption;
 		var dynamicOptionRefreshers = [];
 
 		s = m.section(form.NamedSection, 'general', 'updns', _('Settings and Port'));
@@ -1007,18 +1042,22 @@ return view.extend({
 		o.modalonly = true;
 		requireValue(o, _('Select at least one upstream DNS.'), isNXDomainSelected);
 		hideAndClearOptionForNXDomain(o, 'upstreams');
-		o = addMultiValueOption(s, 'ipv4_nftsets', _('Add IPv4 Results to NFT Sets'),
+		ipv4NFTOption = addMultiValueOption(s, 'ipv4_nftsets', _('Add IPv4 Results to NFT Sets'),
 			_('Select system nftables sets that receive resolved IPv4 addresses.'),
-			nftResult.values);
+			nftResult.ipv4Values);
+		o = ipv4NFTOption;
 		o.modalonly = true;
 		hideAndClearOptionForNXDomain(o, 'ipv4_nftsets');
-		o = addMultiValueOption(s, 'ipv6_nftsets', _('Add IPv6 Results to NFT Sets'),
+		ipv6NFTOption = addMultiValueOption(s, 'ipv6_nftsets', _('Add IPv6 Results to NFT Sets'),
 			_('Select system nftables sets that receive resolved IPv6 addresses.'),
-			nftResult.values);
+			nftResult.ipv6Values);
+		o = ipv6NFTOption;
 		o.modalonly = true;
 		hideAndClearOptionForNXDomain(o, 'ipv6_nftsets');
 		if (nftResult.error) {
-			o.description = _('Could not list system nftables sets: %s').format(String(nftResult.error));
+			var nftError = _('Could not list system nftables sets: %s').format(String(nftResult.error));
+			ipv4NFTOption.description = nftError;
+			ipv6NFTOption.description = nftError;
 		}
 		o = s.option(form.Flag, 'add_upstream_ips', _('Add Upstream DNS IPs to NFT Sets'),
 			_("Also add the selected upstream servers' IPv4 and IPv6 addresses to the corresponding sets. Hostnames are resolved at startup and refreshed every five minutes."));
