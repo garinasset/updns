@@ -25,7 +25,7 @@ define Package/updns
   CATEGORY:=Network
   SUBMENU:=DNS
   TITLE:=updns upstream DNS server
-  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +nftables
+  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +nftables-nojson
 endef
 
 # 描述 - 软件包
