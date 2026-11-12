@@ -1,0 +1,136 @@
+name: OpenWrt package repository
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openwrt-repository-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  OPENWRT_RELEASE: 25.12.6
+  PAGE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make test
+
+  prepare:
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.versions.outputs.publish }}
+      architectures: ${{ steps.matrix.outputs.architectures }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare with published package versions
+        id: versions
+        run: python3 scripts/openwrt-repository.py prepare
+      - name: Get the OpenWrt target definitions
+        if: steps.versions.outputs.publish == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: openwrt/openwrt
+          ref: v${{ env.OPENWRT_RELEASE }}
+          path: openwrt-source
+      - name: Select Go-compatible package architectures
+        if: steps.versions.outputs.publish == 'true'
+        id: matrix
+        working-directory: openwrt-source
+        run: |
+          set -o pipefail
+          perl scripts/dump-target-info.pl architectures 2>/dev/null |
+            awk '{print $1}' |
+            grep -E '^(aarch64_|arm_|i386_|i686_|mips_|mipsel_|mips64_|mips64el_|riscv64_|loongarch64_|x86_64$)' |
+            sort -u > "$RUNNER_TEMP/architectures"
+          grep -qx x86_64 "$RUNNER_TEMP/architectures"
+          architectures=$(jq -Rsc 'split("\n") | map(select(length > 0))' "$RUNNER_TEMP/architectures")
+          echo "architectures=$architectures" >> "$GITHUB_OUTPUT"
+
+  build:
+    if: needs.prepare.outputs.publish == 'true'
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        arch: ${{ fromJSON(needs.prepare.outputs.architectures) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with the matching official SDK
+        env:
+          ARCH: ${{ matrix.arch }}
+          MODE: ${{ matrix.arch == 'x86_64' && 'all' || 'backend' }}
+        run: |
+          set -eu
+          image="ghcr.io/openwrt/sdk:${ARCH}-${OPENWRT_RELEASE}"
+          docker pull "$image"
+          docker run --name openwrt-build -v "$GITHUB_WORKSPACE:/src:ro" \
+            "$image" sh /src/scripts/build-openwrt-ci.sh /src /builder "$MODE"
+          mkdir -p "$RUNNER_TEMP/packages"
+          docker cp "openwrt-build:/builder/bin/packages/$ARCH/." "$RUNNER_TEMP/packages/"
+          find "$RUNNER_TEMP/packages" -name 'updns-*.apk' -print | grep .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.arch }}
+          path: ${{ runner.temp }}/packages/**/*.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    if: needs.prepare.outputs.publish == 'true'
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/packages
+      - name: Obtain the SDK's APK tool
+        run: |
+          set -eu
+          docker create --name apk-sdk "ghcr.io/openwrt/sdk:x86-64-${OPENWRT_RELEASE}"
+          docker cp apk-sdk:/builder/staging_dir/host "$RUNNER_TEMP/apk-host"
+      - name: Sign repository indexes
+        env:
+          APK_SIGNING_KEY: ${{ secrets.APK_SIGNING_KEY }}
+          APK_TOOL: ${{ runner.temp }}/apk-host/bin/apk
+          APK_KEY: ${{ runner.temp }}/updns-signing-key.pem
+          INPUT_DIR: ${{ runner.temp }}/packages
+          OUTPUT_DIR: ${{ runner.temp }}/site
+          ARCHITECTURES: ${{ needs.prepare.outputs.architectures }}
+        run: |
+          set -eu
+          test -n "$APK_SIGNING_KEY"
+          umask 077
+          printf '%s\n' "$APK_SIGNING_KEY" > "$APK_KEY"
+          umask 022
+          python3 scripts/openwrt-repository.py publish
+          rm -f "$APK_KEY"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/site
+      - id: deploy
+        uses: actions/deploy-pages@v4
