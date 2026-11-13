@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+from string import Template
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,11 @@ PACKAGES = {
     "luci-app-updns": "luci",
     "luci-i18n-updns-zh-cn": "luci",
 }
+PAGE_TEMPLATE = Path(__file__).with_name("pages.html")
+
+
+def pages_digest() -> str:
+    return hashlib.sha256(PAGE_TEMPLATE.read_bytes()).hexdigest()
 
 
 def versions():
@@ -99,6 +105,7 @@ def prepare():
         old is None
         or old["versions"] != current
         or old.get("sdk_release") != SDK_RELEASE
+        or old.get("pages_sha256") != pages_digest()
     )
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write(f"publish={'true' if changed else 'false'}\n")
@@ -184,6 +191,7 @@ def publish():
         "sdk_release": SDK_RELEASE,
         "versions": current,
         "public_key_sha256": key_digest,
+        "pages_sha256": pages_digest(),
         "packages": {},
     }
     for arch in architectures:
@@ -243,6 +251,7 @@ def publish():
 
 
 def generate_indexes(site: Path) -> None:
+    template = Template(PAGE_TEMPLATE.read_text(encoding="utf-8"))
     directories = [site, *sorted(path for path in site.rglob("*") if path.is_dir())]
     for directory in directories:
         files = sorted(
@@ -252,34 +261,42 @@ def generate_indexes(site: Path) -> None:
         checksums = {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in files
         }
-        title = "Index of /updns/"
-        relative = directory.relative_to(site).as_posix()
-        if relative != ".":
-            title += relative + "/"
-        rows = []
-        if directory != site:
-            rows.append('<tr><td><a href="../">../</a></td><td></td><td></td></tr>')
+        parts = ["updns", *directory.relative_to(site).parts]
+        title = "Home / " + " / ".join(parts)
+        breadcrumb = ['<a href="https://downloads.garinasset.com/">Home</a>']
+        for index, part in enumerate(parts):
+            href = "../" * (len(parts) - index - 1) or "./"
+            current = ' aria-current="page"' if index == len(parts) - 1 else ""
+            breadcrumb.append(f'<a href="{href}"{current}>{html.escape(part)}</a>')
+        parent = "https://downloads.garinasset.com/" if directory == site else "../"
+        rows = [
+            f'<li><a class="file-link" href="{parent}" aria-label="Parent directory">'
+            '<i class="fa-solid fa-level-up-alt file-icon" aria-hidden="true"></i>'
+            '<span class="col-name">..</span><span class="col-size">&mdash;</span>'
+            '<span class="col-sha">&mdash;</span></a></li>'
+        ]
         for path in sorted(directory.iterdir(), key=lambda path: (not path.is_dir(), path.name)):
             if path.name == "index.html":
                 continue
-            name = path.name + ("/" if path.is_dir() else "")
-            href = html.escape(urllib.parse.quote(name), quote=True)
-            size = "" if path.is_dir() else str(path.stat().st_size)
+            is_directory = path.is_dir()
+            name = path.name
+            href = html.escape(urllib.parse.quote(name, safe="") + ("/" if is_directory else ""), quote=True)
+            size = "&mdash;" if is_directory else str(path.stat().st_size)
+            checksum = checksums.get(name, "&mdash;")
+            icon = "fa-folder" if is_directory else "fa-file"
             rows.append(
-                f'<tr><td><a href="{href}">{html.escape(name)}</a></td>'
-                f'<td>{size}</td><td><code>{checksums.get(path.name, "")}</code></td></tr>'
+                f'<li><a class="file-link" href="{href}">'
+                f'<i class="fa-solid {icon} file-icon" aria-hidden="true"></i>'
+                f'<span class="col-name" title="{html.escape(name, quote=True)}">{html.escape(name)}</span>'
+                f'<span class="col-size" title="Size in bytes">{size}</span>'
+                f'<span class="col-sha">{checksum}</span></a></li>'
             )
         (directory / "index.html").write_text(
-            '<!doctype html>\n<html lang="en"><meta charset="utf-8">'
-            '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{html.escape(title)}</title>"
-            "<style>body{font-family:monospace;padding:1rem}table{border-collapse:collapse}"
-            "td,th{text-align:left;padding:.4rem 1rem .4rem 0}"
-            "code{overflow-wrap:anywhere}a{white-space:nowrap}</style>"
-            f"<h1>{html.escape(title)}</h1>"
-            "<p>Sizes are in bytes. SHA-256 values are shown for each file.</p>"
-            "<table><thead><tr><th>Name</th><th>Size</th><th>SHA-256</th></tr></thead>"
-            "<tbody>" + "".join(rows) + "</tbody></table></html>\n",
+            template.substitute(
+                title=html.escape(title),
+                breadcrumb=" / ".join(breadcrumb),
+                rows="\n".join(rows),
+            ),
             encoding="utf-8",
         )
 

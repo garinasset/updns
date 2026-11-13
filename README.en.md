@@ -85,7 +85,6 @@ The official package repository currently provides prebuilt **APK** packages onl
 The following instructions apply to OpenWrt 25.12:
 
 ```sh
-ARCH="$(apk --print-arch)"
 
 # Download the repository signing public key
 wget -O /tmp/updns-public.pem https://downloads.garinasset.com/updns/openwrt/signing.pem
@@ -97,6 +96,7 @@ sha256sum /tmp/updns-public.pem
 cp /tmp/updns-public.pem /etc/apk/keys/updns.pem
 
 # Configure the package repository
+ARCH="$(apk --print-arch)"
 echo "https://downloads.garinasset.com/updns/openwrt/25.12/${ARCH}/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
 
 # Update package indexes and install packages

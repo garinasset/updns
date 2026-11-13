@@ -209,10 +209,34 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual((self.root / "github-output").read_text(), "publish=true\n")
 
     def test_prepare_skips_unchanged_publication(self):
-        old = {"versions": dict(self.current), "sdk_release": "25.12.6"}
+        old = {
+            "versions": dict(self.current),
+            "sdk_release": "25.12.6",
+            "pages_sha256": repository.pages_digest(),
+        }
         with patch.object(repository, "previous", return_value=old):
             repository.prepare()
         self.assertEqual((self.root / "github-output").read_text(), "publish=false\n")
+
+    def test_prepare_detects_page_template_changes(self):
+        old = {
+            "versions": dict(self.current),
+            "sdk_release": "25.12.6",
+            "pages_sha256": "old-template",
+        }
+        with patch.object(repository, "previous", return_value=old):
+            repository.prepare()
+        self.assertEqual((self.root / "github-output").read_text(), "publish=true\n")
+
+    def test_style_publication_preserves_package_bytes(self):
+        first = self.publish()
+        self.seed_site(first)
+        with patch.object(repository, "pages_digest", return_value="new-template"):
+            site = self.publish()
+        manifest = json.loads((site / "openwrt/25.12/manifest.json").read_bytes())
+        self.assertEqual(manifest["pages_sha256"], "new-template")
+        for original in (first / "openwrt").rglob("*.apk"):
+            self.assertEqual(original.read_bytes(), (site / original.relative_to(first)).read_bytes())
 
     def test_prepare_publishes_new_series(self):
         repository.prepare()
@@ -222,7 +246,7 @@ class RepositoryTests(unittest.TestCase):
         site = self.publish()
         for directory in [site, *(path for path in site.rglob("*") if path.is_dir())]:
             listing = (directory / "index.html").read_text()
-            self.assertIn("SHA-256 values are shown", listing)
+            self.assertIn('<div class="col-sha">SHA-256</div>', listing)
             self.assertFalse((directory / "SHA256SUMS").exists())
             for path in directory.iterdir():
                 if path.is_file() and path.name != "index.html":
@@ -239,6 +263,42 @@ class RepositoryTests(unittest.TestCase):
         listing = (site / "index.html").read_text()
         self.assertIn("test &lt;&amp;&quot;.apk", listing)
         self.assertIn('href="test%20%3C%26%22.apk"', listing)
+
+    def test_indexes_use_homepage_style_and_parent_navigation(self):
+        site = self.publish()
+        root = (site / "index.html").read_text()
+        self.assertIn("<title>Home / updns</title>", root)
+        self.assertIn(
+            '<a class="file-link" href="https://downloads.garinasset.com/" aria-label="Parent directory">',
+            root,
+        )
+        for directory in [site, *(path for path in site.rglob("*") if path.is_dir())]:
+            listing = (directory / "index.html").read_text()
+            self.assertIn('href="https://downloads.garinasset.com/assets/css/style.css"', listing)
+            self.assertIn("theme-preference", listing)
+            self.assertIn("overflow-wrap: anywhere", listing)
+            self.assertNotIn("white-space: nowrap", listing)
+            self.assertNotIn("text-overflow: ellipsis", listing)
+            self.assertLess(listing.index('aria-label="Parent directory"'), listing.index('class="col-name" title='))
+        nested = (site / "openwrt/25.12/x86_64/index.html").read_text()
+        self.assertIn("<title>Home / updns / openwrt / 25.12 / x86_64</title>", nested)
+        self.assertIn(
+            '<a href="https://downloads.garinasset.com/">Home</a> / '
+            '<a href="../../../">updns</a> / <a href="../../">openwrt</a> / '
+            '<a href="../">25.12</a> / <a href="./" aria-current="page">x86_64</a>',
+            nested,
+        )
+        package = site / "openwrt/25.12/x86_64/updns-1.0.0-r61.apk"
+        self.assertIn(f'<span class="col-size" title="Size in bytes">{package.stat().st_size}</span>', nested)
+
+    def test_index_escapes_nested_breadcrumbs(self):
+        site = self.root / "escaped"
+        nested = site / 'folder <&"'
+        nested.mkdir(parents=True)
+        repository.generate_indexes(site)
+        listing = (nested / "index.html").read_text()
+        self.assertIn('<a href="./" aria-current="page">folder &lt;&amp;&quot;</a>', listing)
+        self.assertIn('href="folder%20%3C%26%22/"', (site / "index.html").read_text())
 
     def test_tampered_old_package_is_rejected(self):
         self.seed_site(self.publish())

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$title</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;500&family=Work+Sans:wght@400;500;600&display=swap">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css">
+    <link rel="stylesheet" href="https://downloads.garinasset.com/assets/css/style.css">
+    <link rel="icon" href="data:,">
+    <style>
+        .breadcrumb,
+        .col-name,
+        .col-size,
+        .col-sha {
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        .col-name {
+            overflow: visible;
+            text-overflow: clip;
+        }
+
+        .col-size {
+            width: min(96px, 17%);
+        }
+
+        .col-sha {
+            width: min(480px, 50%);
+        }
+
+        .file-link .col-sha {
+            font-size: 12px;
+        }
+
+        @media (max-width: 639px) {
+            .col-sha {
+                width: 40%;
+            }
+
+            .file-link .col-sha {
+                font-size: 10px;
+            }
+        }
+    </style>
+</head>
+<body class="light" id="theme-root">
+    <div class="page-wrapper">
+        <header class="header">
+            <div class="header-upper">
+                <div class="container header-top">
+                    <a class="logo" href="https://downloads.garinasset.com/" aria-label="Home" title="downloads.garinasset.com">
+                        <i class="fa-solid fa-folder-tree" aria-hidden="true"></i>
+                    </a>
+                    <h1 class="brand-text"><a href="https://downloads.garinasset.com/">downloads.garinasset.com</a></h1>
+                    <button class="theme-toggle" id="theme-toggle" type="button"
+                        aria-label="Toggle Light/Dark Mode" aria-pressed="false" title="Toggle Light/Dark Mode">
+                        <span class="theme-track">
+                            <span class="theme-toggle-circle">
+                                <i class="fa-solid fa-lightbulb" aria-hidden="true"></i>
+                            </span>
+                        </span>
+                    </button>
+                </div>
+            </div>
+            <nav class="breadcrumb-container" aria-label="Breadcrumb">
+                <div class="container breadcrumb">$breadcrumb</div>
+            </nav>
+        </header>
+        <main class="container main-content">
+            <section class="directory-container" aria-label="Downloads">
+                <div class="header-row">
+                    <div class="col-name">Name</div>
+                    <div class="col-size">Size</div>
+                    <div class="col-sha">SHA-256</div>
+                </div>
+                <ul class="file-list" aria-label="Download directories and files">
+$rows
+                </ul>
+            </section>
+        </main>
+        <footer class="container footer">
+            <p>Inspired by <a href="https://www.directorylister.com">Directory Lister</a></p>
+            <div class="footer-links">
+                <a class="social-github" href="https://github.com/garinasset" aria-label="GitHub" title="GitHub">
+                    <i class="fa-brands fa-github" aria-hidden="true"></i>
+                </a>
+            </div>
+        </footer>
+    </div>
+    <script>
+        const themeRoot = document.getElementById('theme-root');
+        const themeToggle = document.getElementById('theme-toggle');
+        const THEME_KEY = 'theme-preference';
+
+        function applyTheme(theme) {
+            themeRoot.classList.toggle('dark', theme === 'dark');
+            themeRoot.classList.toggle('light', theme !== 'dark');
+            themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
+        }
+
+        try {
+            applyTheme(localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light');
+        } catch (error) {
+            console.warn('Theme preference storage is unavailable:', error);
+            applyTheme('light');
+        }
+
+        themeToggle.addEventListener('click', () => {
+            const theme = themeRoot.classList.contains('dark') ? 'light' : 'dark';
+            applyTheme(theme);
+            try {
+                localStorage.setItem(THEME_KEY, theme);
+            } catch (error) {
+                console.warn('Unable to save theme preference:', error);
+            }
+        });
+    </script>
+</body>
+</html>

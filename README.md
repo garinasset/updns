@@ -91,7 +91,6 @@ root@OpenWrt:~# updns google.com
 以下操作适用于 OpenWrt 25.12：
 
 ```sh
-ARCH="$(apk --print-arch)"
 
 # 下载软件源签名公钥
 wget -O /tmp/updns-public.pem https://downloads.garinasset.com/updns/openwrt/signing.pem
@@ -103,6 +102,7 @@ sha256sum /tmp/updns-public.pem
 cp /tmp/updns-public.pem /etc/apk/keys/updns.pem
 
 # 配置软件源
+ARCH="$(apk --print-arch)"
 echo "https://downloads.garinasset.com/updns/openwrt/25.12/${ARCH}/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
 
 # 更新软件源并安装软件包
