@@ -101,7 +101,7 @@ jobs:
       pages: write
       id-token: write
     environment:
-      name: downloads.garinasset.com
+      name: artifacts
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7

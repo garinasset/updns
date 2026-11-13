@@ -26,6 +26,7 @@ On your OpenWrt network, updns can run as a standalone local DNS server or as th
 | [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black)](https://developer.mozilla.org/docs/Web/JavaScript) | LuCI view logic for rule editing, dynamic selectors, and runtime status |
 | [![gettext](https://img.shields.io/badge/gettext-PO-A42E2B?logo=gnu&logoColor=white)](https://www.gnu.org/software/gettext/) | Internationalization format for Simplified Chinese UI text |
 | [![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/) | Source hosting and version control |
+| [![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)](https://docs.github.com/en/actions) | CI/CD automation for automatically deploying code changes to the production server |
 | [![Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-D22128?logo=apache&logoColor=white)](./LICENSE) | Open-source license |
 
 ## 🚀 Workflow
@@ -75,11 +76,21 @@ After installing updns and its LuCI app, open **Services → Turnout DNS** in th
 
 ## 📦 Installation
 
+### Version Support
+
+The official package repository currently provides prebuilt **APK** packages only for **OpenWrt 25.12**, with architecture-specific builds. Prebuilt packages are not currently available for historical major OpenWrt releases. On other versions, you must manually build the packages using the corresponding OpenWrt SDK or source tree.
+
+### Installation Steps
+
+The following instructions apply to OpenWrt 25.12:
+
 ```sh
 ARCH="$(apk --print-arch)"
+
+# Download the repository signing public key
 wget -O /tmp/updns-public.pem https://downloads.garinasset.com/updns/openwrt/signing.pem
 
-# Verify the public key's SHA-256
+# Verify the public key SHA-256 checksum
 sha256sum /tmp/updns-public.pem
 
 # Install the public key
@@ -88,12 +99,12 @@ cp /tmp/updns-public.pem /etc/apk/keys/updns.pem
 # Configure the package repository
 echo "https://downloads.garinasset.com/updns/openwrt/25.12/${ARCH}/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
 
-# Update repository indexes and install the packages
+# Update package indexes and install packages
 apk update
 apk add updns luci-app-updns luci-i18n-updns-zh-cn
 ```
 
-Do not use `--allow-untrusted` to install packages from this repository, so that package authenticity is verified. Recheck the repository URL after upgrading firmware or changing architectures.
+Do not use --allow-untrusted when installing packages from the repository to ensure package signature verification and trusted package sources.After upgrading the firmware or changing the device architecture, recheck the repository URL and package compatibility.
 
 ## 📖 Detailed Documentation
 

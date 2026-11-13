@@ -28,6 +28,7 @@
 | [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black)](https://developer.mozilla.org/docs/Web/JavaScript) | LuCI 视图逻辑，实现规则编辑、动态选择与运行状态展示 |
 | [![gettext](https://img.shields.io/badge/gettext-PO-A42E2B?logo=gnu&logoColor=white)](https://www.gnu.org/software/gettext/) | 国际化翻译格式，维护简体中文界面文本 |
 | [![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/) | 代码托管与版本管理 |
+| [![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)](https://docs.github.com/en/actions) | CI/CD 自动化，将代码变更自动部署到生产服务器 |
 | [![Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-D22128?logo=apache&logoColor=white)](./LICENSE) | 开源许可证 |
 
 ## 🚀 工作流程
@@ -80,11 +81,19 @@ root@OpenWrt:~# updns google.com
 
 ## 📦 安装
 
+### 版本支持说明
 
+目前官方软件源仅提供 **OpenWrt 25.12** 对应架构的预编译 **APK** 软件包。历史 OpenWrt 大版本暂不提供预编译软件包。如需在其他版本上使用，请根据对应版本的 OpenWrt SDK 或源码环境手动编译构建。
+
+
+### 安装步骤
+
+以下操作适用于 OpenWrt 25.12：
 
 ```sh
-
 ARCH="$(apk --print-arch)"
+
+# 下载软件源签名公钥
 wget -O /tmp/updns-public.pem https://downloads.garinasset.com/updns/openwrt/signing.pem
 
 # 核对公钥 SHA-256
@@ -96,13 +105,12 @@ cp /tmp/updns-public.pem /etc/apk/keys/updns.pem
 # 配置软件源
 echo "https://downloads.garinasset.com/updns/openwrt/25.12/${ARCH}/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
 
-# 更新软件源并安装包
+# 更新软件源并安装软件包
 apk update
 apk add updns luci-app-updns luci-i18n-updns-zh-cn
-
 ```
 
-不要使用 `--allow-untrusted` 安装软件源中的包, 以确保软件包来源可信。升级固件或更换架构后应重新检查源地址。
+不要使用 `--allow-untrusted` 安装软件源中的软件包，以确保软件包来源可信。升级固件或更换设备架构后，应重新检查软件源地址及软件包兼容性。
 
 
 ## 📖 详细文档
