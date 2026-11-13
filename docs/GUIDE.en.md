@@ -252,6 +252,24 @@ updns reads `/etc/hosts`, hosts files under `/tmp/hosts/`, and DHCP leases direc
 
 The cache uses a hash table and three indexed min-heaps: LFU eviction priority, refresh scheduling time, and ready-task expiration. Hit-priority updates, insertion/deletion, and individual scheduling are O(log N); idle scanning is O(1). Entries enter the ready queue only at state transitions, avoiding a complete scan, sort, and DNS-record copy every 100 ms. All indexes remove entries synchronously with deletion, without unbounded stale-node accumulation. Total space is O(N), with the in-flight map proportional to actual shared resolutions.
 
+### GitHub Actions package repository
+
+The repository provides automated publication through GitHub Actions and GitHub Pages. The workflow builds the backend separately for Go-compatible package architectures defined by OpenWrt, using the **OpenWrt 25.12.6 SDK**, and publishes under the **25.12 release series**. The architecture-independent LuCI and Chinese translation packages are built once with the x86_64 SDK, copied unchanged into every supported architecture's feed, and checked for `noarch` metadata. Publication requires all builds to succeed; actual architecture availability depends on the workflow results. Other OpenWrt release series require validation and workflow changes and must not be considered supported yet. Sharing a feed within a series still requires dependency and ABI compatibility checks across patch releases. A successful build does not imply testing on a device.
+
+For maintainers setting up the repository:
+
+1. Add the private key contents as the repository Actions secret `APK_SIGNING_KEY`. Changing the key requires users to reestablish trust; the workflow rejects direct replacement of an existing signing key.
+
+2. The workflow uses the GitHub Environment named `downloads.garinasset.com`, which also labels deployments under **Deployments** on the repository homepage.
+
+3. Default-branch pushes and manual runs compare package versions and the SDK release with the published manifest. The backend uses `PKG_VERSION` and `PKG_RELEASE` from `openwrt/updns/Makefile`; LuCI and the translation use those fields from `openwrt/luci-app-updns/Makefile`. The first release builds all packages; when package versions and the SDK are unchanged, tests run without publication. If the SDK is unchanged and only one package group changes, the other group's previously published packages are retained during publication. Changed package versions must be strictly greater; Git tags are not required. The translation package version includes LuCI's release number, so increasing LuCI's `PKG_RELEASE` also updates the translation.
+
+4. Set the workflow's `OPENWRT_RELEASE` to a full SDK release such as `25.12.6`; the script derives the `25.12` series directory. Changing the SDK within a series rebuilds and publishes all packages even at unchanged package versions. Clients do not treat same-version rebuilds as normal upgrades, so also increase the affected packages' `PKG_RELEASE` when users should receive the rebuild through `apk upgrade`. Each series keeps only its latest package set, without retaining superseded packages. Switching to a new series creates a new directory and retains the previously published series and signatures. Replacements must remain compatible with older patch releases within the series; otherwise, they cannot simply overwrite the existing packages. Keep GitHub Pages storage limits in mind. Each series' `manifest.json` records the full SDK release, package versions, and package SHA-256 checksums.
+
+5. Browse downloads at <https://downloads.garinasset.com/updns/>. CI generates static directory indexes for the project root and every subdirectory, showing file sizes in bytes, SHA-256 checksums, and download links. Each directory also provides `SHA256SUMS` for checking downloaded files with `sha256sum -c SHA256SUMS`; it excludes itself and the navigation page `index.html`. This is not a server-generated GitHub Pages directory listing and does not modify the custom domain's root homepage. Same-site checksums do not replace independent public-key verification or repository signatures.
+
+6. The remote package repository is independent of the local `artifacts/` directory.
+
 ## Basic UCI Example
 
 ```text
@@ -356,7 +374,9 @@ The script synchronizes feeds, builds `updns` and `luci-app-updns`, and generate
 
 APKs are under the SDK's `bin/packages/x86_64/`, in `packages/` and `luci/`. Use the actual output filenames.
 
-The APKs are not signed with a trusted key. Copy all three to the device, then install:
+### Installing APKs (Local Builds)
+
+Locally built APKs are not signed with a trusted key, so `--allow-untrusted` is required. Copy all three packages to the device, then install:
 
 ```sh
 apk add --allow-untrusted \
@@ -378,37 +398,52 @@ For test/development environments, see [`scripts/build-openwrt.sh`](../scripts/b
 
 The repository's `artifacts/` directory holds the latest successfully built and tested packages. Replace a component's old package only after its new package passes validation.
 
-### GitHub Actions package repository
+### Operating Modes
 
-The GitHub Actions workflow builds for Go-compatible package architectures using the OpenWrt 25.12.6 SDK. The architecture-independent LuCI and Chinese translation packages are built once with the x86_64 SDK. Publication requires all builds to succeed; actual architecture availability depends on the workflow results. Other OpenWrt releases require validation and workflow changes. A successful build does not imply testing on a device.
+updns supports two modes: **standalone** or **as the upstream of dnsmasq**. Choose whichever suits your needs.
 
-Before the first release, set **Settings → Pages → Build and deployment → Source** to **GitHub Actions**. The workflow replaces the entire Pages site. Generate a persistent signing key locally, keep the private key secret and backed up, and provide the public key's SHA-256 through an independently trusted channel:
+#### Standalone
 
-```sh
-umask 077
-openssl ecparam -name prime256v1 -genkey -noout -out updns-private.pem
-openssl pkey -in updns-private.pem -pubout -out updns-public.pem
-sha256sum updns-public.pem
-```
-
-Add the private key contents as the repository Actions secret `APK_SIGNING_KEY`, then merge the workflow into the default branch. The first push publishes the current versions; approve the workflow if required. Failed runs can be rerun. A changed signing key is rejected to avoid silently breaking users' trust.
-
-Default-branch pushes and manual runs compare the versions in the backend and LuCI Makefiles with the published versions. The first release builds all packages; unchanged versions are tested but not published. When only one package group changes, the other group's previously published packages are retained. Changed versions must be strictly greater; Git tags are not required. The translation package version includes LuCI's release number. When another OpenWrt release is added, previously published feeds are retained, subject to GitHub Pages storage limits.
-
-After publication, verify the downloaded key's SHA-256 against the independently provided value before installing it and adding the matching feed:
+Use updns as the local DNS server, with clients sending DNS queries directly to it.
 
 ```sh
-ARCH="$(apk --print-arch)"
-wget -O /tmp/updns-public.pem https://garinasset.github.io/updns/updns.pem
-sha256sum /tmp/updns-public.pem
-# Only after verifying the expected SHA-256:
-cp /tmp/updns-public.pem /etc/apk/keys/updns.pem
-echo "https://garinasset.github.io/updns/25.12.6/${ARCH}/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
-apk update
-apk add updns luci-app-updns luci-i18n-updns-zh-cn
+uci set dhcp.@dnsmasq[0].port='0'
+uci commit dhcp
+
+uci set updns.general.enabled='1'
+uci set updns.general.port='53'
+uci commit updns
+
+/etc/init.d/dnsmasq restart
+/etc/init.d/updns restart
 ```
 
-Do not use `--allow-untrusted` for this repository. Keep the official feeds matching your firmware enabled for dependencies, and recheck the feed after changing firmware or architecture. The remote repository is separate from local `artifacts/`.
+- Setting the dnsmasq DNS port to `0` disables its DNS service while retaining DHCP and other functionality.
+- updns listens on port `53` and receives client DNS queries directly. Ensure no other DNS service occupies that port.
+
+#### As the Upstream of dnsmasq
+
+dnsmasq forwards client DNS queries to updns.
+
+```sh
+uci -q delete dhcp.@dnsmasq[0].port
+uci -q delete dhcp.@dnsmasq[0].server
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#153'
+uci set dhcp.@dnsmasq[0].cachesize='0'
+uci set dhcp.@dnsmasq[0].noresolv='1'
+uci set dhcp.@dnsmasq[0].add_subnet='32,128'
+uci commit dhcp
+
+uci set updns.general.enabled='1'
+uci set updns.general.port='153'
+uci commit updns
+
+/etc/init.d/updns restart
+/etc/init.d/dnsmasq restart
+```
+
+- **Enabling the cache only in updns is recommended.** Set dnsmasq's cache size to `0` to disable it. This avoids splitting cache state between the two services and retaining old dnsmasq results after rule or upstream changes. With dnsmasq caching disabled, updns manages the cache for forwarded queries.
+- `uci set dhcp.@dnsmasq[0].add_subnet='32,128'` makes dnsmasq attach ECS information to forwarded queries, conveying the full client IPv4 or IPv6 address with a /32 or /128 prefix for updns logging. Decide whether to enable it according to your privacy needs. It does not change updns domain matching or upstream selection, and does not mean updns forwards client ECS to upstream servers.
 
 ## Troubleshooting
 

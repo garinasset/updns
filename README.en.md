@@ -32,11 +32,7 @@ On your OpenWrt network, updns can run as a standalone local DNS server or as th
 
 **Client → updns → Rule matching → Local data / Cache / Upstream DNS (UDP · TCP · DoT · DoH) → nftset → Response**
 
-- UpDNS matches domain rules and processes blocking rules first, followed by hosts, local DHCP data, and valid cache entries. It then determines whether an upstream DNS query is required. If no domain rule or fallback rule matches, the entire upstream DNS list serves as the default rule's upstream group.
-
-- When an upstream query is required, UpDNS selects upstream DNS servers according to the selection strategy configured for the matching rule.
-
-- All resolution results are subject to the applicable blocking, address family, and nftset rules.
+updns matches domain rules and processes blocking rules first, followed by hosts, local DHCP data, and valid cache entries. It then determines whether to forward the query to upstream DNS servers. If no rule matches and no fallback rule is configured, the entire upstream DNS list serves as the default rule's upstream group.
 
 ## 💻 DNS Auditing — CLI Output Example
 
@@ -86,52 +82,27 @@ After installing updns and its LuCI app, open **Services → Turnout DNS** in th
     - Logging
 - Rules
 
-## ⚙️ Operating Modes
-
-updns supports two modes: **standalone** or **as the upstream of dnsmasq**.
-
-### Standalone
-
-Use updns as the LAN DNS server, with clients sending DNS queries directly to it.
+## 📦 Installation
 
 ```sh
-uci set dhcp.@dnsmasq[0].port='0'
-uci commit dhcp
+ARCH="$(apk --print-arch)"
+wget -O /tmp/updns-public.pem https://downloads.garinasset.com/updns/openwrt/signing.pem
 
-uci set updns.general.enabled='1'
-uci set updns.general.port='53'
-uci commit updns
+# Verify the public key's SHA-256
+sha256sum /tmp/updns-public.pem
 
-/etc/init.d/dnsmasq restart
-/etc/init.d/updns restart
+# Install the public key
+cp /tmp/updns-public.pem /etc/apk/keys/updns.pem
+
+# Configure the package repository
+echo "https://downloads.garinasset.com/updns/openwrt/25.12/${ARCH}/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
+
+# Update repository indexes and install the packages
+apk update
+apk add updns luci-app-updns luci-i18n-updns-zh-cn
 ```
 
-- Setting the dnsmasq DNS port to `0` disables its DNS service while retaining DHCP and other functionality.
-- updns listens on port `53` and receives client DNS queries directly. Ensure no other DNS service occupies that port.
-
-### As the Upstream of dnsmasq
-
-dnsmasq forwards client DNS queries to updns.
-
-```sh
-uci -q delete dhcp.@dnsmasq[0].port
-uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#153'
-uci set dhcp.@dnsmasq[0].cachesize='0'
-uci set dhcp.@dnsmasq[0].noresolv='1'
-uci set dhcp.@dnsmasq[0].add_subnet='32,128'
-uci commit dhcp
-
-uci set updns.general.enabled='1'
-uci set updns.general.port='153'
-uci commit updns
-
-/etc/init.d/updns restart
-/etc/init.d/dnsmasq restart
-```
-
-- **Enabling the cache only in updns is recommended.** Set dnsmasq's cache size to `0` to disable it. This avoids splitting cache state between the two services and retaining old dnsmasq results after rule or upstream changes. With dnsmasq caching disabled, updns manages the cache for forwarded queries.
-- `add_subnet='32,128'` makes dnsmasq attach ECS information to forwarded queries, conveying the full client IPv4 or IPv6 address with a /32 or /128 prefix for updns logging. Decide whether to enable it according to your privacy needs. It does not change updns domain matching or upstream selection, and does not mean updns forwards client ECS to upstream servers.
+Do not use `--allow-untrusted` to install packages from this repository, so that package authenticity is verified. Recheck the repository URL after upgrading firmware or changing architectures.
 
 ## 📖 Detailed Documentation
 

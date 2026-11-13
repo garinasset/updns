@@ -88,54 +88,32 @@ root@OpenWrt:~# updns google.com
 
 - 规则
 
+## 📦 安装
 
-## ⚙️ 运行方式
 
-updns 支持两种运行模式：**独立运行** 或 **作为 dnsmasq 的上游**, 你可以按需选择。
 
-- ### 独立运行
+```sh
 
-    将 updns 作为局域网 DNS 服务器，由客户端直接向 updns 发起 DNS 查询。
+ARCH="$(apk --print-arch)"
+wget -O /tmp/updns-public.pem https://downloads.garinasset.com/updns/openwrt/signing.pem
 
-    ```sh
-    uci set dhcp.@dnsmasq[0].port='0'
-    uci commit dhcp
+# 核对公钥 SHA-256
+sha256sum /tmp/updns-public.pem
 
-    uci set updns.general.enabled='1'
-    uci set updns.general.port='53'
-    uci commit updns
+# 安装公钥
+cp /tmp/updns-public.pem /etc/apk/keys/updns.pem
 
-    /etc/init.d/dnsmasq restart
-    /etc/init.d/updns restart
-    ```
-    - 将 dnsmasq DNS 监听端口设为 0，即关闭其 DNS 解析服务，保留 DHCP 等其他功能；
+# 配置软件源
+echo "https://downloads.garinasset.com/updns/openwrt/25.12/${ARCH}/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
 
-    - 配置 updns 服务监听 53 端口，直接接收客户端 DNS 查询。请确保没有其他 DNS 服务占用 53 端口。
+# 更新软件源并安装包
+apk update
+apk add updns luci-app-updns luci-i18n-updns-zh-cn
 
-- ### 作为`dnsmasq`的上游
+```
 
-    将 updns 作为 dnsmasq 的上游 DNS 时，由 dnsmasq 转发客户端的 DNS 查询到 updns。
+不要使用 `--allow-untrusted` 安装软件源中的包, 以确保软件包来源可信。升级固件或更换架构后应重新检查源地址。
 
-    ```sh
-    uci -q delete dhcp.@dnsmasq[0].port
-    uci -q delete dhcp.@dnsmasq[0].server
-    uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#153'
-    uci set dhcp.@dnsmasq[0].cachesize='0'
-    uci set dhcp.@dnsmasq[0].noresolv='1'
-    uci set dhcp.@dnsmasq[0].add_subnet='32,128'
-    uci commit dhcp
-
-    uci set updns.general.enabled='1'
-    uci set updns.general.port='153'
-    uci commit updns
-
-    /etc/init.d/updns restart
-    /etc/init.d/dnsmasq restart
-    ```
-
-    - 建议**只在 updns 中启用缓存**，将 dnsmasq 的缓存大小设置为 `0`（即关闭 dnsmasq 缓存）。这样可以避免 dnsmasq 与 updns 各自缓存带来的状态分散，以及规则或上游变更后旧结果仍留在 dnsmasq 缓存中的情况;禁用 dnsmasq 缓存后，转发到 updns 的查询由 updns 管理缓存。
-
-    - `uci set dhcp.@dnsmasq[0].add_subnet='32,128'` 配置 dnsmasq 在转发 DNS 查询时附带 ECS 信息，将客户端 IPv4、IPv6 地址分别以 /32、/128 的掩码传递给 updns，供其日志记录。该设置传递完整客户端地址，请按隐私需求决定是否启用；它不会改变 updns 的域名规则匹配或上游选择，也不表示 updns 会将客户端 ECS 转发给上游。
 
 ## 📖 详细文档
 

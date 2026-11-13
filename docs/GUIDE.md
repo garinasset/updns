@@ -297,7 +297,23 @@ updns 直接读取 `/etc/hosts`、`/tmp/hosts/` 下的 hosts 文件和 DHCP 租�
 
 缓存采用哈希表与三个索引最小堆实现，分别用于管理缓存项的 LFU 淘汰顺序、缓存刷新调度时刻，以及已就绪刷新任务的过期时间。命中优先级更新、添加/删除和单条调度为 O(log N)，空闲扫描为 O(1)；到期条目仅在状态转换时进入就绪队列，避免每 100 毫秒全量遍历、排序和复制 DNS 记录。所有索引随删除同步回收，无无界失效节点积累；总体空间 O(N)，在途任务表另按实际共享解析数计。
 
+### GitHub Actions 软件源
 
+仓库提供 GitHub Actions 和 GitHub Pages 自动发布流程。当前配置使用 **OpenWrt 25.12.6 SDK**，软件源按发行系列发布在 **25.12** 目录中，为 OpenWrt 目标定义中 Go 支持的包架构分别构建后端。LuCI 和中文翻译是架构无关包，仅使用 x86_64 SDK 构建一次，再将相同文件复制到每个受支持架构的软件源目录，并校验其 `noarch` 元数据。所有架构均构建成功后才发布；实际可用架构以工作流结果为准，其他 OpenWrt 发行系列须先验证并调整流程，不能视为已支持。同系列共用软件源仍须验证补丁版本间的依赖和 ABI 兼容性；构建成功不等同于真实设备测试。
+
+维护者首次使用时：
+
+1. 私钥文件内容添加为仓库 Actions secret，名称为 `APK_SIGNING_KEY`。更换密钥需要用户重新建立信任；流程会拒绝直接替换已有签名密钥。
+
+2. 工作流使用名为 `downloads.garinasset.com` 的 GitHub Environment，仓库首页 **Deployments** 将按此名称展示部署。
+
+3. 默认分支推送或手动运行时，流程对比已发布的包版本及 SDK 版本：后端检查 `openwrt/updns/Makefile`，LuCI 和翻译检查 `openwrt/luci-app-updns/Makefile` 中的 `PKG_VERSION`、`PKG_RELEASE`。首次发布会构建全部包；包版本和 SDK 均未变化时只运行测试，不更新软件源；SDK 未变化且只更新其中一组时，发布时另一组保留原有包。变更后的包版本必须高于已发布版本，也不需要 Git 标签。中文翻译包版本包含 LuCI 的 release，因而增大 LuCI 的 `PKG_RELEASE` 也会更新翻译包。
+
+4. 调整工作流的 `OPENWRT_RELEASE` 时，使用完整 SDK 版本，例如 `25.12.6`；脚本自动提取系列 `25.12`。同系列 SDK 更新会触发全部包重新构建、发布，即使包版本未变；但客户端不会将同版本重建视为常规升级，如需用户通过 `apk upgrade` 获取新构建，也应增加对应包的 `PKG_RELEASE`。同系列目录只保留最新一套包，不保留已替换的旧包；切换到新系列时建立新目录，并保留已发布的其他系列软件源及其签名。同系列内亦应保持对旧补丁版本的兼容，否则不能直接覆盖；请注意 GitHub Pages 的容量限制。各系列的 `manifest.json` 记录完整 SDK 版本、包版本及包的 SHA-256。
+
+5. 下载入口为 <https://downloads.garinasset.com/updns/>。CI 为项目根目录和每层子目录生成静态目录索引，展示文件大小（字节）、SHA-256 和下载链接，并生成各目录的 `SHA256SUMS`，可下载后通过 `sha256sum -c SHA256SUMS` 校验同目录文件；校验清单不包含自身和导航页 `index.html`。这不是 GitHub Pages 服务器的自动目录列表，也不会修改域名根首页。同站点哈希不能替代公钥的独立可信验证或软件源签名。
+
+6. 此远程软件源与本地 `artifacts/` 目录互不影响。
 
 ## 基本 UCI 示例
 
@@ -402,7 +418,9 @@ make lint
 
 生成的 APK 位于 SDK 的 `bin/packages/x86_64/` 下，分别在 `packages/` 和 `luci/` 子目录中。具体文件名以 SDK 输出为准。
 
-APK 未使用受信任密钥签名。将三个包复制到设备后安装：
+### 安装 APK (本地构建)
+
+由于编译生成的 APK 未使用受信任密钥签名, `--allow-untrusted` 参数是必要的。将三个包复制到设备后安装：
 
 ```sh
 apk add --allow-untrusted \
@@ -424,39 +442,53 @@ apk add --allow-untrusted \
 
 仓库的 `artifacts/` 目录用于保存最新构建且通过测试的安装包；同一组件的新包验证通过后替换旧包。
 
-### GitHub Actions 软件源
+### 运行方式
 
-仓库提供 GitHub Actions 和 GitHub Pages 自动发布流程。当前配置使用 **OpenWrt 25.12.6 SDK**，为 OpenWrt 目标定义中 Go 支持的包架构分别构建后端，LuCI 和中文翻译包使用 x86_64 SDK 构建的架构无关包。所有架构均构建成功后才发布；实际可用架构以工作流结果为准，其他 OpenWrt 版本须先验证并调整流程，不能视为已支持。构建成功不等同于真实设备测试。
+updns 支持两种运行模式：**独立运行** 或 **作为 dnsmasq 的上游**, 你可以按需选择。
 
-维护者首次使用时：
+- #### 独立运行
 
-1. 在 GitHub 仓库 **Settings → Pages** 中将构建来源设为 **GitHub Actions**。该流程会替换这个 Pages 站点的全部内容，不应与其他网站共用。
-2. 在安全的本地环境生成长期保存的签名密钥，不要提交或公开私钥：
-   ```sh
-   umask 077
-   openssl ecparam -name prime256v1 -genkey -noout -out updns-private.pem
-   openssl pkey -in updns-private.pem -pubout -out updns-public.pem
-   sha256sum updns-public.pem
-   ```
-3. 将私钥文件内容添加为仓库 Actions secret，名称为 `APK_SIGNING_KEY`。备份私钥，并通过独立可信渠道公布公钥的 SHA-256。更换密钥需要用户重新建立信任；流程会拒绝直接替换已有签名密钥。
-4. 将流程合并至默认分支；首次推送会发布当前版本。失败后可在 Actions 中重新运行；如果工作流需要审批，请先批准。密钥和 Pages 配置应在首次发布前完成。
+    将 updns 作为本地 DNS 服务器，由客户端直接向 updns 发起 DNS 查询。
 
-默认分支推送或手动运行时，流程对比已发布的包版本：后端检查 `openwrt/updns/Makefile`，LuCI 和翻译检查 `openwrt/luci-app-updns/Makefile` 中的 `PKG_VERSION`、`PKG_RELEASE`。首次发布会构建全部包；版本未变化只运行测试，不更新软件源；只更新其中一组时，另一组保留原有包。变更后的版本必须高于已发布版本，也不需要 Git 标签。中文翻译包版本包含 LuCI 的 release，因而增大 LuCI 的 `PKG_RELEASE` 也会更新翻译包。以后增加 OpenWrt 版本时，流程会保留已发布的其他版本软件源；请注意 GitHub Pages 的容量限制。
+    ```sh
+    uci set dhcp.@dnsmasq[0].port='0'
+    uci commit dhcp
 
-用户安装时，应先通过维护者提供的独立可信渠道核对公钥 SHA-256，再配置与设备包架构匹配的软件源。以下地址仅在发布成功并启用 Pages 后可用：
+    uci set updns.general.enabled='1'
+    uci set updns.general.port='53'
+    uci commit updns
 
-```sh
-ARCH="$(apk --print-arch)"
-wget -O /tmp/updns-public.pem https://garinasset.github.io/updns/updns.pem
-sha256sum /tmp/updns-public.pem
-# 与维护者独立提供的公钥 SHA-256 核对一致后：
-cp /tmp/updns-public.pem /etc/apk/keys/updns.pem
-echo "https://garinasset.github.io/updns/25.12.6/${ARCH}/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
-apk update
-apk add updns luci-app-updns luci-i18n-updns-zh-cn
-```
+    /etc/init.d/dnsmasq restart
+    /etc/init.d/updns restart
+    ```
+    - 将 dnsmasq DNS 监听端口设为 0，即关闭其 DNS 解析服务，保留 DHCP 等其他功能；
 
-不要使用 `--allow-untrusted` 安装软件源中的包。设备还需启用与固件匹配的官方软件源，以安装依赖；升级固件或更换架构后应重新检查源地址。此远程软件源与本地 `artifacts/` 目录互不影响。
+    - 配置 updns 服务监听 53 端口，直接接收客户端 DNS 查询。请确保没有其他 DNS 服务占用 53 端口。
+
+- #### 作为 dnsmasq 的上游
+
+    将 updns 作为 dnsmasq 的上游 DNS 时，由 dnsmasq 转发客户端的 DNS 查询到 updns。
+
+    ```sh
+    uci -q delete dhcp.@dnsmasq[0].port
+    uci -q delete dhcp.@dnsmasq[0].server
+    uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#153'
+    uci set dhcp.@dnsmasq[0].cachesize='0'
+    uci set dhcp.@dnsmasq[0].noresolv='1'
+    uci set dhcp.@dnsmasq[0].add_subnet='32,128'
+    uci commit dhcp
+
+    uci set updns.general.enabled='1'
+    uci set updns.general.port='153'
+    uci commit updns
+
+    /etc/init.d/updns restart
+    /etc/init.d/dnsmasq restart
+    ```
+
+    - 建议**只在 updns 中启用缓存**，将 dnsmasq 的缓存大小设置为 `0`（即关闭 dnsmasq 缓存）。这样可以避免 dnsmasq 与 updns 各自缓存带来的状态分散，以及规则或上游变更后旧结果仍留在 dnsmasq 缓存中的情况;禁用 dnsmasq 缓存后，转发到 updns 的查询由 updns 管理缓存。
+
+    - `uci set dhcp.@dnsmasq[0].add_subnet='32,128'` 配置 dnsmasq 在转发 DNS 查询时附带 ECS 信息，将客户端 IPv4、IPv6 地址分别以 /32、/128 的掩码传递给 updns，供其日志记录。该设置传递完整客户端地址，请按隐私需求决定是否启用；它不会改变 updns 的域名规则匹配或上游选择，也不表示 updns 会将客户端 ECS 转发给上游。
 
 ## 故障排查
 

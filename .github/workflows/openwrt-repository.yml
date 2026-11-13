@@ -14,7 +14,7 @@ concurrency:
 
 env:
   OPENWRT_RELEASE: 25.12.6
-  PAGE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+  PAGE_URL: https://downloads.garinasset.com/updns
 
 jobs:
   test:
@@ -26,6 +26,8 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: make test
+      - name: Test repository publication
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
   prepare:
     if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -99,7 +101,7 @@ jobs:
       pages: write
       id-token: write
     environment:
-      name: github-pages
+      name: downloads.garinasset.com
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
