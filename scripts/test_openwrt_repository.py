@@ -400,7 +400,37 @@ class RepositoryTests(unittest.TestCase):
             nested,
         )
         package = site / "openwrt/25.12/x86_64/updns-1.0.0-r61.apk"
-        self.assertIn(f'<span class="col-size" title="Size in bytes">{package.stat().st_size}</span>', nested)
+        self.assertIn(f'<span class="col-size">{repository.format_size(package.stat().st_size)}</span>', nested)
+        self.assertNotIn("Size in bytes", nested)
+        self.assertNotIn('<span class="col-size" title=', nested)
+
+    def test_sizes_use_units_and_two_decimal_places(self):
+        for size, expected in (
+            (0, "0.00 KB"),
+            (1, "0.00 KB"),
+            (1023, "1.00 KB"),
+            (1024, "1.00 KB"),
+            (12_636, "12.34 KB"),
+            (1024 ** 2 - 1, "1024.00 KB"),
+            (1024 ** 2, "1.00 MB"),
+            (1_258_291, "1.20 MB"),
+            (1024 ** 3 - 1, "1024.00 MB"),
+            (1024 ** 3, "1.00 GB"),
+            (1_320_702_443, "1.23 GB"),
+        ):
+            with self.subTest(size=size):
+                self.assertEqual(repository.format_size(size), expected)
+
+    def test_page_digest_tracks_template_and_generator(self):
+        baseline = repository.pages_digest()
+        original_read = Path.read_bytes
+        for changed in (repository.PAGE_TEMPLATE, Path(repository.__file__)):
+            with self.subTest(changed=changed):
+                def read_bytes(path):
+                    data = original_read(path)
+                    return data + b"\n" if path == changed else data
+                with patch.object(Path, "read_bytes", read_bytes):
+                    self.assertNotEqual(repository.pages_digest(), baseline)
 
     def test_index_escapes_nested_breadcrumbs(self):
         site = self.root / "escaped"

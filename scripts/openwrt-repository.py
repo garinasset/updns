@@ -31,7 +31,17 @@ PAGE_TEMPLATE = Path(__file__).with_name("pages.html")
 
 
 def pages_digest() -> str:
-    return hashlib.sha256(PAGE_TEMPLATE.read_bytes()).hexdigest()
+    digest = hashlib.sha256(PAGE_TEMPLATE.read_bytes())
+    digest.update(Path(__file__).read_bytes())
+    return digest.hexdigest()
+
+
+def format_size(size: int) -> str:
+    if size < 1024 ** 2:
+        return f"{size / 1024:.2f} KB"
+    if size < 1024 ** 3:
+        return f"{size / 1024 ** 2:.2f} MB"
+    return f"{size / 1024 ** 3:.2f} GB"
 
 
 def versions():
@@ -349,14 +359,14 @@ def generate_indexes(site: Path) -> None:
             is_directory = path.is_dir()
             name = path.name
             href = html.escape(urllib.parse.quote(name, safe="") + ("/" if is_directory else ""), quote=True)
-            size = "&mdash;" if is_directory else str(path.stat().st_size)
+            size = "&mdash;" if is_directory else format_size(path.stat().st_size)
             checksum = checksums.get(name, "&mdash;")
             icon = "fa-folder" if is_directory else "fa-file"
             rows.append(
                 f'<li><a class="file-link" href="{href}">'
                 f'<i class="fa-solid {icon} file-icon" aria-hidden="true"></i>'
                 f'<span class="col-name" title="{html.escape(name, quote=True)}">{html.escape(name)}</span>'
-                f'<span class="col-size" title="Size in bytes">{size}</span>'
+                f'<span class="col-size">{size}</span>'
                 f'<span class="col-sha">{checksum}</span></a></li>'
             )
         (directory / "index.html").write_text(
