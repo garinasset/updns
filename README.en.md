@@ -73,15 +73,6 @@ root@OpenWrt:~# updns google.com
 
 After installing updns and its LuCI app, open **Services → Turnout DNS** in the OpenWrt web interface.
 
-- Running Status
-- Configuration
-    - Settings and Port
-    - Upstream DNS
-    - Domain Lists
-    - Cache
-    - Logging
-- Rules
-
 ## 📦 Installation
 
 ```sh

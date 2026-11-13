@@ -77,16 +77,6 @@ root@OpenWrt:~# updns google.com
 
 安装 updns 与 LuCI 应用后，在 OpenWrt 管理界面进入 **服务 → 道岔 DNS** 即可配置使用。
 
-- 运行状态
-
-- 配置
-    - 设置及端口
-    - 上游 DNS
-    - 域名列表
-    - 缓存
-    - 日志记录
-
-- 规则
 
 ## 📦 安装
 
