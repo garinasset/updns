@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=updns
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=60
+PKG_RELEASE:=61
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=file://$(TOPDIR)/dl
@@ -19,6 +19,10 @@ GO_PKG_BUILD_PKG:=github.com/garinasset/updns/cmd/updns
 
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
+
+ifneq ($(filter $(ARCH_PACKAGES),mips_24kc mipsel_24kc mipsel_24kc_24kf mipsel_74kc),)
+  GO_CFLAGS_TO_REMOVE+=-mips16 -minterlink-mips16
+endif
 
 define Package/updns
   SECTION:=net
