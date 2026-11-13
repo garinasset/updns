@@ -182,7 +182,7 @@ class RepositoryTests(unittest.TestCase):
                 patch.object(repository, "SDK_RELEASE", "26.12.1"):
             site = self.publish()
         for original in (first / "openwrt/25.12").rglob("*"):
-            if original.is_file() and original.name not in {"index.html", "SHA256SUMS"}:
+            if original.is_file() and original.name != "index.html":
                 self.assertEqual(
                     original.read_bytes(),
                     (site / original.relative_to(first)).read_bytes(),
@@ -218,18 +218,16 @@ class RepositoryTests(unittest.TestCase):
         repository.prepare()
         self.assertEqual((self.root / "github-output").read_text(), "publish=true\n")
 
-    def test_indexes_and_checksums_cover_all_directories(self):
+    def test_indexes_show_file_hashes_without_checksum_manifests(self):
         site = self.publish()
         for directory in [site, *(path for path in site.rglob("*") if path.is_dir())]:
             listing = (directory / "index.html").read_text()
-            self.assertIn("SHA256SUMS", listing)
-            for line in (directory / "SHA256SUMS").read_text().splitlines():
-                digest, filename = line.split("  ", 1)
-                self.assertNotIn(filename, {"SHA256SUMS", "index.html"})
-                self.assertEqual(
-                    digest, hashlib.sha256((directory / filename).read_bytes()).hexdigest()
-                )
-                self.assertIn(digest, listing)
+            self.assertIn("SHA-256 values are shown", listing)
+            self.assertFalse((directory / "SHA256SUMS").exists())
+            for path in directory.iterdir():
+                if path.is_file() and path.name != "index.html":
+                    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                    self.assertIn(digest, listing)
             if directory != site:
                 self.assertIn('href="../"', listing)
 

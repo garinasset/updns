@@ -247,15 +247,11 @@ def generate_indexes(site: Path) -> None:
     for directory in directories:
         files = sorted(
             path for path in directory.iterdir()
-            if path.is_file() and path.name not in {"index.html", "SHA256SUMS"}
+            if path.is_file() and path.name != "index.html"
         )
         checksums = {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in files
         }
-        (directory / "SHA256SUMS").write_text(
-            "".join(f"{digest}  {name}\n" for name, digest in checksums.items()),
-            encoding="utf-8",
-        )
         title = "Index of /updns/"
         relative = directory.relative_to(site).as_posix()
         if relative != ".":
@@ -281,7 +277,7 @@ def generate_indexes(site: Path) -> None:
             "td,th{text-align:left;padding:.4rem 1rem .4rem 0}"
             "code{overflow-wrap:anywhere}a{white-space:nowrap}</style>"
             f"<h1>{html.escape(title)}</h1>"
-            "<p>Sizes are in bytes. SHA256SUMS excludes itself and index.html.</p>"
+            "<p>Sizes are in bytes. SHA-256 values are shown for each file.</p>"
             "<table><thead><tr><th>Name</th><th>Size</th><th>SHA-256</th></tr></thead>"
             "<tbody>" + "".join(rows) + "</tbody></table></html>\n",
             encoding="utf-8",
