@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       publish: ${{ steps.versions.outputs.publish }}
+      build: ${{ steps.versions.outputs.build }}
       architectures: ${{ steps.matrix.outputs.architectures }}
     steps:
       - uses: actions/checkout@v7
@@ -42,14 +43,14 @@ jobs:
         id: versions
         run: python3 scripts/openwrt-repository.py prepare
       - name: Get the OpenWrt target definitions
-        if: steps.versions.outputs.publish == 'true'
+        if: steps.versions.outputs.build == 'true'
         uses: actions/checkout@v7
         with:
           repository: openwrt/openwrt
           ref: v${{ env.OPENWRT_RELEASE }}
           path: openwrt-source
       - name: Select Go-compatible package architectures
-        if: steps.versions.outputs.publish == 'true'
+        if: steps.versions.outputs.build == 'true'
         id: matrix
         working-directory: openwrt-source
         run: |
@@ -63,7 +64,7 @@ jobs:
           echo "architectures=$architectures" >> "$GITHUB_OUTPUT"
 
   build:
-    if: needs.prepare.outputs.publish == 'true'
+    if: needs.prepare.outputs.build == 'true'
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
@@ -93,7 +94,11 @@ jobs:
           retention-days: 1
 
   publish:
-    if: needs.prepare.outputs.publish == 'true'
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' &&
+          needs.prepare.outputs.publish == 'true' &&
+          (needs.build.result == 'success' ||
+           (needs.prepare.outputs.build == 'false' && needs.build.result == 'skipped')) }}
     needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
@@ -106,14 +111,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
+        if: needs.prepare.outputs.build == 'true'
         with:
           path: ${{ runner.temp }}/packages
       - name: Obtain the SDK's APK tool
+        if: needs.prepare.outputs.build == 'true'
         run: |
           set -eu
           docker create --name apk-sdk "ghcr.io/openwrt/sdk:x86-64-${OPENWRT_RELEASE}"
           docker cp apk-sdk:/builder/staging_dir/host "$RUNNER_TEMP/apk-host"
-      - name: Sign repository indexes
+      - name: Publish packages or refresh directory pages
         env:
           APK_SIGNING_KEY: ${{ secrets.APK_SIGNING_KEY }}
           APK_TOOL: ${{ runner.temp }}/apk-host/bin/apk
@@ -121,13 +128,18 @@ jobs:
           INPUT_DIR: ${{ runner.temp }}/packages
           OUTPUT_DIR: ${{ runner.temp }}/site
           ARCHITECTURES: ${{ needs.prepare.outputs.architectures }}
+          BUILD_PACKAGES: ${{ needs.prepare.outputs.build }}
         run: |
           set -eu
           test -n "$APK_SIGNING_KEY"
           umask 077
           printf '%s\n' "$APK_SIGNING_KEY" > "$APK_KEY"
           umask 022
-          python3 scripts/openwrt-repository.py publish
+          if [ "$BUILD_PACKAGES" = true ]; then
+            python3 scripts/openwrt-repository.py publish
+          else
+            python3 scripts/openwrt-repository.py update-pages
+          fi
           rm -f "$APK_KEY"
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

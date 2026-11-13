@@ -101,17 +101,110 @@ def previous(public_key=None):
 def prepare():
     old = previous()
     current = versions()
-    changed = (
+    build = (
         old is None
         or old["versions"] != current
         or old.get("sdk_release") != SDK_RELEASE
-        or old.get("pages_sha256") != pages_digest()
     )
+    page_data = fetch("pages.json", allow_missing=True)
+    published_pages = (
+        json.loads(page_data)["pages_sha256"] if page_data is not None
+        else old.get("pages_sha256") if old else None
+    )
+    changed = build or published_pages != pages_digest()
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write(f"publish={'true' if changed else 'false'}\n")
+        output.write(f"build={'true' if build else 'false'}\n")
     print("Package versions:", current)
     print("SDK release:", SDK_RELEASE)
     print("Published versions:", old["versions"] if old else "none")
+
+
+def release_registry(data: bytes) -> list[str]:
+    releases = json.loads(data)["releases"]
+    if (
+        not isinstance(releases, list)
+        or any(not isinstance(release, str) or not re.fullmatch(r"[0-9]+\.[0-9]+", release)
+               for release in releases)
+        or len(set(releases)) != len(releases)
+    ):
+        raise ValueError("Invalid release registry")
+    return releases
+
+
+def restore_release(output: Path, release: str, public_key: bytes) -> dict:
+    data = fetch(f"{release}/manifest.json")
+    signature = fetch(f"{release}/manifest.json.sig")
+    verify_signature(data, signature, public_key)
+    retained = json.loads(data)
+    if (
+        retained["release"] != release
+        or retained["public_key_sha256"] != hashlib.sha256(public_key).hexdigest()
+    ):
+        raise ValueError(f"Invalid manifest for {release}")
+    release_dir = output / release
+    release_dir.mkdir()
+    (release_dir / "manifest.json").write_bytes(data)
+    (release_dir / "manifest.json.sig").write_bytes(signature)
+    for arch, entries in retained["packages"].items():
+        if not re.fullmatch(r"[a-z0-9_-]+", arch):
+            raise ValueError(f"Invalid architecture: {arch}")
+        directory = release_dir / arch
+        directory.mkdir()
+        index = fetch(f"{release}/{arch}/packages.adb")
+        if "indexes" in retained:
+            expected = retained["indexes"].get(arch)
+            if not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected):
+                raise ValueError(f"Invalid index checksum in manifest: {release}/{arch}")
+            if hashlib.sha256(index).hexdigest() != expected:
+                raise ValueError(f"Published index checksum mismatch: {release}/{arch}")
+        else:
+            print(f"Warning: legacy manifest has no index checksum: {release}/{arch}", file=sys.stderr)
+        (directory / "packages.adb").write_bytes(index)
+        for name, group in PACKAGES.items():
+            entry = entries[name]
+            filename = entry["filename"]
+            if filename != f"{name}-{retained['versions'][group]}.apk" or "/" in filename:
+                raise ValueError("Invalid retained package filename")
+            package = fetch(f"{release}/{arch}/{filename}")
+            if hashlib.sha256(package).hexdigest() != entry["sha256"]:
+                raise ValueError(f"Published package checksum mismatch: {filename}")
+            (directory / filename).write_bytes(package)
+    return retained
+
+
+def write_page_state(output: Path, key: str) -> None:
+    data = (json.dumps({"pages_sha256": pages_digest()}) + "\n").encode()
+    (output / "pages.json").write_bytes(data)
+    (output / "pages.json.sig").write_bytes(sign(data, key))
+
+
+def update_pages() -> None:
+    key = os.environ["APK_KEY"]
+    site = Path(os.environ["OUTPUT_DIR"])
+    output = site / "openwrt"
+    public_key = subprocess.check_output(["openssl", "pkey", "-in", key, "-pubout"])
+    if fetch("signing.pem") != public_key:
+        raise ValueError("Signing key changed; refusing to replace the trusted repository")
+    data = fetch("releases.json")
+    signature = fetch("releases.json.sig")
+    verify_signature(data, signature, public_key)
+    releases = release_registry(data)
+    if RELEASE not in releases:
+        raise ValueError("Current release is not published; package build is required")
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "signing.pem").write_bytes(public_key)
+    (output / "releases.json").write_bytes(data)
+    (output / "releases.json.sig").write_bytes(signature)
+    current = versions()
+    for release in releases:
+        retained = restore_release(output, release, public_key)
+        if release == RELEASE and (
+            retained["versions"] != current or retained.get("sdk_release") != SDK_RELEASE
+        ):
+            raise ValueError("Published packages changed; package build is required")
+    write_page_state(output, key)
+    generate_indexes(site)
 
 
 def publish():
@@ -131,9 +224,7 @@ def publish():
             raise ValueError("Existing repository has no release registry")
         releases = []
     else:
-        releases = json.loads(registry_data)["releases"]
-        if not isinstance(releases, list) or len(set(releases)) != len(releases):
-            raise ValueError("Invalid release registry")
+        releases = release_registry(registry_data)
         if fetch("signing.pem") != public_key:
             raise ValueError("Signing key changed; refusing to replace the trusted repository")
         verify_signature(registry_data, fetch("releases.json.sig"), public_key)
@@ -157,35 +248,9 @@ def publish():
     output.mkdir(parents=True, exist_ok=True)
     (output / "signing.pem").write_bytes(public_key)
     for release in releases:
-        if not isinstance(release, str) or not re.fullmatch(r"[0-9]+\.[0-9]+", release):
-            raise ValueError("Invalid release in registry")
         if release == RELEASE:
             continue
-        data = fetch(f"{release}/manifest.json")
-        signature = fetch(f"{release}/manifest.json.sig")
-        verify_signature(data, signature, public_key)
-        retained = json.loads(data)
-        if retained["release"] != release or retained["public_key_sha256"] != key_digest:
-            raise ValueError(f"Invalid manifest for {release}")
-        release_dir = output / release
-        release_dir.mkdir()
-        (release_dir / "manifest.json").write_bytes(data)
-        (release_dir / "manifest.json.sig").write_bytes(signature)
-        for arch, entries in retained["packages"].items():
-            if not re.fullmatch(r"[a-z0-9_-]+", arch):
-                raise ValueError(f"Invalid architecture: {arch}")
-            directory = release_dir / arch
-            directory.mkdir()
-            (directory / "packages.adb").write_bytes(fetch(f"{release}/{arch}/packages.adb"))
-            for name, group in PACKAGES.items():
-                entry = entries[name]
-                filename = entry["filename"]
-                if filename != f"{name}-{retained['versions'][group]}.apk" or "/" in filename:
-                    raise ValueError("Invalid retained package filename")
-                package = fetch(f"{release}/{arch}/{filename}")
-                if hashlib.sha256(package).hexdigest() != entry["sha256"]:
-                    raise ValueError(f"Published package checksum mismatch: {filename}")
-                (directory / filename).write_bytes(package)
+        restore_release(output, release, public_key)
     manifest = {
         "release": RELEASE,
         "sdk_release": SDK_RELEASE,
@@ -193,6 +258,7 @@ def publish():
         "public_key_sha256": key_digest,
         "pages_sha256": pages_digest(),
         "packages": {},
+        "indexes": {},
     }
     for arch in architectures:
         if not re.fullmatch(r"[a-z0-9_-]+", arch):
@@ -241,12 +307,14 @@ def publish():
             cwd=directory,
             check=True,
         )
+        manifest["indexes"][arch] = hashlib.sha256((directory / "packages.adb").read_bytes()).hexdigest()
     manifest_data = (json.dumps(manifest, indent=2) + "\n").encode()
     (output / RELEASE / "manifest.json").write_bytes(manifest_data)
     (output / RELEASE / "manifest.json.sig").write_bytes(sign(manifest_data, key))
     registry_data = (json.dumps({"releases": sorted(set(releases + [RELEASE]))}, indent=2) + "\n").encode()
     (output / "releases.json").write_bytes(registry_data)
     (output / "releases.json.sig").write_bytes(sign(registry_data, key))
+    write_page_state(output, key)
     generate_indexes(site)
 
 
@@ -306,5 +374,7 @@ if __name__ == "__main__":
         prepare()
     elif sys.argv[1:] == ["publish"]:
         publish()
+    elif sys.argv[1:] == ["update-pages"]:
+        update_pages()
     else:
-        raise SystemExit("Usage: openwrt-repository.py prepare|publish")
+        raise SystemExit("Usage: openwrt-repository.py prepare|publish|update-pages")

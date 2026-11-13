@@ -206,7 +206,7 @@ class RepositoryTests(unittest.TestCase):
         old = {"versions": dict(self.current), "sdk_release": "25.12.5"}
         with patch.object(repository, "previous", return_value=old):
             repository.prepare()
-        self.assertEqual((self.root / "github-output").read_text(), "publish=true\n")
+        self.assertEqual((self.root / "github-output").read_text(), "publish=true\nbuild=true\n")
 
     def test_prepare_skips_unchanged_publication(self):
         old = {
@@ -216,7 +216,7 @@ class RepositoryTests(unittest.TestCase):
         }
         with patch.object(repository, "previous", return_value=old):
             repository.prepare()
-        self.assertEqual((self.root / "github-output").read_text(), "publish=false\n")
+        self.assertEqual((self.root / "github-output").read_text(), "publish=false\nbuild=false\n")
 
     def test_prepare_detects_page_template_changes(self):
         old = {
@@ -226,21 +226,132 @@ class RepositoryTests(unittest.TestCase):
         }
         with patch.object(repository, "previous", return_value=old):
             repository.prepare()
-        self.assertEqual((self.root / "github-output").read_text(), "publish=true\n")
+        self.assertEqual((self.root / "github-output").read_text(), "publish=true\nbuild=false\n")
 
     def test_style_publication_preserves_package_bytes(self):
         first = self.publish()
         self.seed_site(first)
+        site = self.root / "pages-only"
+        with patch.object(repository, "pages_digest", return_value="new-template"), \
+                patch.dict(os.environ, {"OUTPUT_DIR": str(site)}), \
+                patch.object(repository.subprocess, "check_output", wraps=self.check_output) as commands:
+            repository.update_pages()
+        self.assertTrue(all(call.args[0][0] == "openssl" for call in commands.call_args_list))
+        state = (site / "openwrt/pages.json").read_bytes()
+        self.assertEqual(json.loads(state)["pages_sha256"], "new-template")
+        repository.verify_signature(
+            state, (site / "openwrt/pages.json.sig").read_bytes(),
+            (site / "openwrt/signing.pem").read_bytes(),
+        )
+        for original in (first / "openwrt").rglob("*"):
+            if original.is_file() and original.name not in ("index.html", "pages.json", "pages.json.sig"):
+                self.assertEqual(original.read_bytes(), (site / original.relative_to(first)).read_bytes())
+        self.seed_site(site)
         with patch.object(repository, "pages_digest", return_value="new-template"):
-            site = self.publish()
-        manifest = json.loads((site / "openwrt/25.12/manifest.json").read_bytes())
-        self.assertEqual(manifest["pages_sha256"], "new-template")
-        for original in (first / "openwrt").rglob("*.apk"):
-            self.assertEqual(original.read_bytes(), (site / original.relative_to(first)).read_bytes())
+            repository.prepare()
+        self.assertEqual((self.root / "github-output").read_text(), "publish=false\nbuild=false\n")
 
     def test_prepare_publishes_new_series(self):
         repository.prepare()
-        self.assertEqual((self.root / "github-output").read_text(), "publish=true\n")
+        self.assertEqual((self.root / "github-output").read_text(), "publish=true\nbuild=true\n")
+
+    def test_prepare_builds_changed_package_versions(self):
+        self.seed_site(self.publish())
+        self.current["updns"] = "1.0.0-r62"
+        repository.prepare()
+        self.assertEqual((self.root / "github-output").read_text(), "publish=true\nbuild=true\n")
+
+    def test_pages_update_preserves_all_release_series(self):
+        self.seed_site(self.publish())
+        self.build_inputs("26.12.1")
+        with patch.object(repository, "RELEASE", "26.12"), \
+                patch.object(repository, "SDK_RELEASE", "26.12.1"):
+            first = self.publish()
+            self.seed_site(first)
+            site = self.root / "pages-only"
+            with patch.dict(os.environ, {"OUTPUT_DIR": str(site)}):
+                repository.update_pages()
+        for release in ("25.12", "26.12"):
+            for original in (first / "openwrt" / release).rglob("*"):
+                if original.is_file() and original.name != "index.html":
+                    self.assertEqual(original.read_bytes(), (site / original.relative_to(first)).read_bytes())
+            self.assertTrue((site / "openwrt" / release / "index.html").is_file())
+
+    def test_pages_update_rejects_tampered_files(self):
+        self.seed_site(self.publish())
+        for path, message in (
+            ("releases.json.sig", None),
+            ("25.12/manifest.json.sig", None),
+            ("25.12/x86_64/packages.adb", "index checksum mismatch"),
+            ("25.12/x86_64/updns-1.0.0-r61.apk", "package checksum mismatch"),
+            ("signing.pem", "Signing key changed"),
+        ):
+            with self.subTest(path=path):
+                original = self.web[path]
+                self.web[path] = b"tampered"
+                with patch.dict(os.environ, {"OUTPUT_DIR": str(self.root / path.replace("/", "-"))}):
+                    if message:
+                        with self.assertRaisesRegex(ValueError, message):
+                            repository.update_pages()
+                    else:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            repository.update_pages()
+                self.web[path] = original
+
+    def test_pages_update_rejects_missing_packages(self):
+        self.seed_site(self.publish())
+        del self.web["25.12/x86_64/updns-1.0.0-r61.apk"]
+        with patch.dict(os.environ, {"OUTPUT_DIR": str(self.root / "missing")}):
+            with self.assertRaises(urllib.error.HTTPError):
+                repository.update_pages()
+
+    def test_pages_update_requires_unchanged_versions_and_sdk(self):
+        self.seed_site(self.publish())
+        for field, value in (("versions", {"updns": "new", "luci": "new"}), ("SDK_RELEASE", "25.12.7")):
+            with self.subTest(field=field), \
+                    patch.dict(os.environ, {"OUTPUT_DIR": str(self.root / field)}):
+                target = patch.object(repository, field, return_value=value) if field == "versions" \
+                    else patch.object(repository, field, value)
+                with target, self.assertRaisesRegex(ValueError, "package build is required"):
+                    repository.update_pages()
+
+    def test_pages_update_accepts_legacy_manifest_with_warning(self):
+        self.seed_site(self.publish())
+        manifest = json.loads(self.web["25.12/manifest.json"])
+        del manifest["indexes"]
+        del manifest["pages_sha256"]
+        data = json.dumps(manifest).encode()
+        self.web["25.12/manifest.json"] = data
+        self.web["25.12/manifest.json.sig"] = repository.sign(data, str(self.key))
+        del self.web["pages.json"]
+        repository.prepare()
+        self.assertEqual((self.root / "github-output").read_text(), "publish=true\nbuild=false\n")
+        with patch.dict(os.environ, {"OUTPUT_DIR": str(self.root / "legacy")}), \
+                patch("sys.stderr") as stderr:
+            repository.update_pages()
+        self.assertIn("legacy manifest has no index checksum", "".join(call.args[0] for call in stderr.write.call_args_list))
+
+    def test_pages_update_rejects_incomplete_index_checksums(self):
+        self.seed_site(self.publish())
+        manifest = json.loads(self.web["25.12/manifest.json"])
+        del manifest["indexes"]["x86_64"]
+        data = json.dumps(manifest).encode()
+        self.web["25.12/manifest.json"] = data
+        self.web["25.12/manifest.json.sig"] = repository.sign(data, str(self.key))
+        with patch.dict(os.environ, {"OUTPUT_DIR": str(self.root / "incomplete")}):
+            with self.assertRaisesRegex(ValueError, "Invalid index checksum"):
+                repository.update_pages()
+
+    def test_pages_update_rejects_invalid_release_registry(self):
+        self.seed_site(self.publish())
+        for releases in (["../outside"], ["25.12", "25.12"], [5], []):
+            data = json.dumps({"releases": releases}).encode()
+            self.web["releases.json"] = data
+            self.web["releases.json.sig"] = repository.sign(data, str(self.key))
+            with self.subTest(releases=releases), \
+                    patch.dict(os.environ, {"OUTPUT_DIR": str(self.root / "invalid")}):
+                with self.assertRaises(ValueError):
+                    repository.update_pages()
 
     def test_indexes_show_file_hashes_without_checksum_manifests(self):
         site = self.publish()
