@@ -386,6 +386,7 @@ class RepositoryTests(unittest.TestCase):
         for directory in [site, *(path for path in site.rglob("*") if path.is_dir())]:
             listing = (directory / "index.html").read_text()
             self.assertIn('href="https://downloads.garinasset.com/assets/css/style.css"', listing)
+            self.assertIn('<meta name="theme-color" content="#0084d1">', listing)
             self.assertIn("theme-preference", listing)
             self.assertIn("overflow-wrap: anywhere", listing)
             self.assertNotIn("white-space: nowrap", listing)

@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0084d1">
     <title>$title</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;500&family=Work+Sans:wght@400;500;600&display=swap">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css">
@@ -92,12 +93,15 @@ $rows
     <script>
         const themeRoot = document.getElementById('theme-root');
         const themeToggle = document.getElementById('theme-toggle');
+        const themeColor = document.querySelector('meta[name="theme-color"]');
+        const header = document.querySelector('.header');
         const THEME_KEY = 'theme-preference';
 
         function applyTheme(theme) {
             themeRoot.classList.toggle('dark', theme === 'dark');
             themeRoot.classList.toggle('light', theme !== 'dark');
             themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
+            themeColor.setAttribute('content', getComputedStyle(header).backgroundColor);
         }
 
         try {

@@ -17,3 +17,4 @@
 /DELIVERY.md
 /MEMO.md
 /REQUIREMENTS.md
+scripts/__pycache__/*.pyc
