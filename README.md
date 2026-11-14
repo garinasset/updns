@@ -95,7 +95,7 @@ root@OpenWrt:~# updns google.com
 # 下载软件源签名公钥
 wget -O /tmp/updns-public.pem https://downloads.garinasset.com/updns/openwrt/signing.pem
 
-# 核对公钥 SHA-256
+# 核对公钥 SHA-256 预期: 27ffe5d333a95b10c81de1279078036a00a4d169741a1f26c5e4e98e539aeb4e
 sha256sum /tmp/updns-public.pem
 
 # 安装公钥

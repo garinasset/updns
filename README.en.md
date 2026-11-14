@@ -89,7 +89,7 @@ The following instructions apply to OpenWrt 25.12:
 # Download the repository signing public key
 wget -O /tmp/updns-public.pem https://downloads.garinasset.com/updns/openwrt/signing.pem
 
-# Verify the public key SHA-256 checksum
+# Verify the public key SHA-256 checksum: 27ffe5d333a95b10c81de1279078036a00a4d169741a1f26c5e4e98e539aeb4e
 sha256sum /tmp/updns-public.pem
 
 # Install the public key
